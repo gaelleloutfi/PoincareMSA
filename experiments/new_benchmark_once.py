@@ -14,12 +14,15 @@ from __future__ import annotations
 
 # Add the project root to Python path
 import sys
-project_root = "/home/hugo/Bureau/PoincareMSA"
+import os
+from pathlib import Path
+
+# Derive project root from this file's location (experiments/ is one level below root)
+project_root = str(Path(__file__).resolve().parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
 import argparse
-import os
 import time
 import timeit
 import numpy as np

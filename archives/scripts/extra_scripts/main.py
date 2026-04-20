@@ -93,12 +93,12 @@ def parse_args():
     parser.add_argument('--dim', help='Embedding dimension', type=int, default=2)
 
     parser.add_argument('--input_path', help='Path to dataset to embed', type=str, 
-        default='/Users/klanna/UniParis/PoincareMSA/data/glob/Nfasta/')
+        default='examples/thioredoxins/fasta0.9/') #modified from klanna
 
     parser.add_argument('--matrices_output_path', help='Path to save KNN and RFA matrices', type=str)
 
     parser.add_argument('--output_path', help='Path to dataset to embed', type=str, 
-        default='/Users/klanna/UniParis/results/glob/')
+        default='results/') # modified from klanna
 
     parser.add_argument('--plot',
         help='Flag True or False, if you want to plot the output.', type=str, 

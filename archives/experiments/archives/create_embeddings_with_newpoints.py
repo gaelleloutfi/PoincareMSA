@@ -13,7 +13,11 @@ from __future__ import annotations
 
 import sys
 # Add the project root to Python path
-project_root = "/home/hugo/Bureau/PoincareMSA"
+from pathlib import Path
+
+# Derive project root from this file's location
+# (archives/experiments/archives/ is 3 levels below root)
+project_root = str(Path(__file__).resolve().parents[3])
 if project_root not in sys.path:
     sys.path.append(project_root)
 

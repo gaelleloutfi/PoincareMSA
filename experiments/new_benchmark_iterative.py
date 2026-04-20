@@ -15,14 +15,17 @@ Defaults and algorithm parameters match `experiments/new_benchmark.py`.
 from __future__ import annotations
 
 import sys
-project_root = "/home/hugo/Bureau/PoincareMSA"
+import os
+from pathlib import Path
+
+# Derive project root from this file's location (experiments/ is one level below root)
+project_root = str(Path(__file__).resolve().parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-import os
+import argparse
 import time
 import timeit
-import argparse
 import numpy as np
 import pandas as pd
 import torch

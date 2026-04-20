@@ -1,14 +1,15 @@
 #!/bin/bash
 
-# python ./main.py --plot true\
-#     --input_path /Users/klanna/UniParis/PoincareMSA/data/glob/Nfasta/\
-#     --output_path /Users/klanna/UniParis/results/glob/
+# Compute the repo root relative to this script's location
+# (this script lives at scripts/build_poincare_map/example_tanya.sh)
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
-
+# Example using the bundled thioredoxins dataset
 python ./main.py --plot true\
-    --input_path /home/lavande/galochkina/SCIENCE/POINCARE/PoincareMSA/examples/thioredoxins/fasta0.9/\
-    --output_path /home/lavande/galochkina/SCIENCE/POINCARE/Thioredoxin/TEST/
+    --input_path "${REPO_ROOT}/examples/thioredoxins/fasta0.9/"\
+    --output_path "${REPO_ROOT}/results/thioredoxins/TEST/"
 
+# Example using the bundled globins dataset
 python ./main.py --plot true\
-    --input_path /home/lavande/galochkina/SCIENCE/POINCARE/PoincareMSA/examples/globins/fasta0.9/\
-    --output_path /home/lavande/galochkina/SCIENCE/POINCARE/Globins/TEST/
+    --input_path "${REPO_ROOT}/examples/globins/fasta0.9/"\
+    --output_path "${REPO_ROOT}/results/globins/TEST/"

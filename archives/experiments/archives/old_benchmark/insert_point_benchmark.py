@@ -8,7 +8,7 @@ Reinsertion benchmark:
 
 Usage (from the project root):
 python3 scripts/experiments/reinsert_benchmark.py --path_embedding test_add_point_2/PM5sigma=1.00gamma=1.00cosinepca=0_seed4.csv \
-    --path_features /home/hugo/Bureau/PoincareMSA/test_add_point_2/features.csv --out results/reinsert_benchmark.csv
+    --path_features experiments/data/test_add_point_2/features.csv --out results/reinsert_benchmark.csv
 
 """
 

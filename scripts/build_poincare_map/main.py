@@ -130,11 +130,11 @@ def parse_args():
 
     # Path to input files
     parser.add_argument('--input_path', help='Path to dataset to embed', type=str, 
-        default='/Users/klanna/UniParis/PoincareMSA/data/glob/Nfasta/')
+        default='examples/thioredoxins/fasta0.9/')
 
     # Path to output folder for figures
     parser.add_argument('--output_path', help='Path to dataset to embed', type=str, 
-        default='/Users/klanna/UniParis/results/glob/')
+        default='results/')
     
     # Use mfasta or plm embeddings ?
     parser.add_argument('--plm_embedding', help='Type of input data that should be used', type=str, 

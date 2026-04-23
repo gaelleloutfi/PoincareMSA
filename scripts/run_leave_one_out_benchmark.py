@@ -1261,10 +1261,35 @@ def build_result_row(
     local_density_proxy: float,
     annotation_row: dict | None,
 ) -> dict:
-    """
-    Assemble a single result row (dict) with all benchmark fields.
-    """
-    raise NotImplementedError("build_result_row — to be implemented")
+    d = {
+        "dataset": dataset,
+        "protein_id": protein_id,
+        "method": method,
+        "sample_mode": sample_mode,
+        "map_build_time": map_build_time,
+        "insertion_time": insertion_time,
+        "Qlocal_red": qlocal_reduced_before,
+        "Qglobal_red": qglobal_reduced_before,
+        "Qlocal_after": qlocal_after,
+        "Qglobal_after": qglobal_after,
+        "delta_Qlocal": qlocal_after - qlocal_reduced_before,
+        "delta_Qglobal": qglobal_after - qglobal_reduced_before,
+        "full_map_radius": full_map_radius,
+        "inserted_radius": inserted_radius,
+        "local_density_proxy": local_density_proxy,
+    }
+    
+    # Add neighbor overlaps dynamically based on the requested k
+    for k, overlap in neighbor_overlaps.items():
+        d[f"neighbor_overlap_k{k}"] = overlap
+        
+    # Merge annotations if available
+    if annotation_row:
+        for k, v in annotation_row.items():
+            if k not in d:  # don't overwrite benchmark metrics
+                d[k] = v
+                
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -1273,7 +1298,11 @@ def build_result_row(
 
 def append_row_to_partial(row: dict, partial_path: str) -> None:
     """Append a single result row to the partial CSV checkpoint file."""
-    raise NotImplementedError("append_row_to_partial — to be implemented")
+    import os
+    import pandas as pd
+    df = pd.DataFrame([row])
+    header = not os.path.exists(partial_path)
+    df.to_csv(partial_path, mode='a', index=False, header=header)
 
 
 def log_error(error_path: str, dataset: str, protein_id: str, method: str, exc: Exception) -> None:
@@ -1461,8 +1490,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 # Annotation fields
                 annotation_row: dict | None = None
                 if bundle.annotations is not None:
-                    # look up by protein_id — deferred to implementation step
-                    pass
+                    annotation_row = bundle.annotations.iloc[remove_idx].to_dict()
 
                 row = build_result_row(
                     dataset=args.dataset,

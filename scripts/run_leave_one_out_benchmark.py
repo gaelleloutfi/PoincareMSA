@@ -1140,7 +1140,7 @@ def insert_method2_rand(
     target_tensor = torch.from_numpy(target).float()
     start = time.perf_counter()
     
-    new_emb, _losses = model.infer_embedding_for_point(
+    new_emb = model.infer_embedding_for_point(
         target_tensor,
         init='random',
         lr=args.lr_insert,
@@ -1177,7 +1177,7 @@ def insert_method3_bary(
     target_tensor = torch.from_numpy(target).float()
     start = time.perf_counter()
     
-    new_emb, _losses = model.infer_embedding_for_point(
+    new_emb = model.infer_embedding_for_point(
         target_tensor,
         init='barycenter',
         lr=args.lr_insert,
@@ -1186,6 +1186,28 @@ def insert_method3_bary(
     
     insertion_time = time.perf_counter() - start
     return new_emb, insertion_time
+
+
+def poincare_pairwise_cross(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """
+    Compute pairwise hyperbolic distances between two sets of points in the
+    Poincaré ball.
+    x: (N, dim)
+    y: (M, dim)
+    Returns: (N, M) distance matrix.
+    """
+    from sklearn.metrics.pairwise import pairwise_distances
+    x = x.astype(np.float64)
+    y = y.astype(np.float64)
+    norm2_x = np.sum(x * x, axis=1)
+    norm2_y = np.sum(y * y, axis=1)
+    sqd = pairwise_distances(x, y, metric='euclidean') ** 2
+    denom = (1.0 - norm2_x)[:, None] * (1.0 - norm2_y)[None, :]
+    denom = np.maximum(denom, 1e-12)
+    arg = 1.0 + 2.0 * sqd / denom
+    arg = np.maximum(arg, 1.0)
+    d = np.log(arg + np.sqrt((arg - 1.0) * (arg + 1.0)))
+    return d
 
 
 def compute_neighbor_overlap(
@@ -1197,11 +1219,27 @@ def compute_neighbor_overlap(
 ) -> float:
     """
     Compare the k nearest neighbours of the removed protein in the full map
-    vs. the k nearest neighbours of the inserted point in the reduced+inserted map.
+    vs. the k nearest neighbours of the inserted point in the reduced map.
 
     Returns the fraction of shared neighbours (Jaccard-style overlap ∈ [0, 1]).
     """
-    raise NotImplementedError("compute_neighbor_overlap — to be implemented")
+    # 1. Distances from the original point to all OTHER points in full map
+    emb_full_others = np.delete(full_emb, removed_idx, axis=0)
+    x_orig = full_emb[removed_idx].reshape(1, -1)
+    d_orig = poincare_pairwise_cross(x_orig, emb_full_others).flatten()
+    
+    # Indices of top-k neighbors in emb_full_others (which structurally align with reduced_emb)
+    top_k_orig = np.argsort(d_orig)[:k]
+    
+    # 2. Distances from inserted point to reduced_emb
+    x_ins = inserted_emb.reshape(1, -1)
+    d_ins = poincare_pairwise_cross(x_ins, reduced_emb).flatten()
+    
+    top_k_ins = np.argsort(d_ins)[:k]
+    
+    # 3. Overlap
+    intersection = len(np.intersect1d(top_k_orig, top_k_ins))
+    return float(intersection / k)
 
 
 
@@ -1414,12 +1452,15 @@ def run_benchmark(args: argparse.Namespace) -> None:
                     )
 
                 # Local density proxy: mean hyperbolic distance to top-5
-                # neighbours in the full map (stub returns NaN for now)
-                local_density_proxy = float("nan")   # placeholder
+                # neighbours in the full map.
+                x_orig = emb_full[remove_idx].reshape(1, -1)
+                emb_full_others = np.delete(emb_full, remove_idx, axis=0)
+                d_orig = poincare_pairwise_cross(x_orig, emb_full_others).flatten()
+                local_density_proxy = float(np.mean(np.sort(d_orig)[:5]))
 
                 # Annotation fields
                 annotation_row: dict | None = None
-                if annotations_df is not None:
+                if bundle.annotations is not None:
                     # look up by protein_id — deferred to implementation step
                     pass
 

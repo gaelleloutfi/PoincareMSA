@@ -7,3 +7,9 @@
 {"dataset": "globins", "protein_id": "119", "method": "bary_init", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:08:16"}
 {"dataset": "globins", "protein_id": "119", "method": "infer_rand", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:08:17"}
 {"dataset": "globins", "protein_id": "119", "method": "infer_bary", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:08:17"}
+{"dataset": "globins", "protein_id": "11", "method": "bary_init", "error": "NameError", "message": "name 'annotations_df' is not defined", "timestamp": "2026-04-23T11:20:38"}
+{"dataset": "globins", "protein_id": "11", "method": "infer_rand", "error": "ValueError", "message": "Incompatible dimension for X and Y matrices: X.shape[1] == 1 while Y.shape[1] == 2", "timestamp": "2026-04-23T11:20:38"}
+{"dataset": "globins", "protein_id": "11", "method": "infer_bary", "error": "ValueError", "message": "Incompatible dimension for X and Y matrices: X.shape[1] == 1 while Y.shape[1] == 2", "timestamp": "2026-04-23T11:20:38"}
+{"dataset": "globins", "protein_id": "120", "method": "bary_init", "error": "NotImplementedError", "message": "build_result_row \u2014 to be implemented", "timestamp": "2026-04-23T11:28:46"}
+{"dataset": "globins", "protein_id": "120", "method": "infer_rand", "error": "NotImplementedError", "message": "build_result_row \u2014 to be implemented", "timestamp": "2026-04-23T11:28:46"}
+{"dataset": "globins", "protein_id": "120", "method": "infer_bary", "error": "NotImplementedError", "message": "build_result_row \u2014 to be implemented", "timestamp": "2026-04-23T11:28:46"}

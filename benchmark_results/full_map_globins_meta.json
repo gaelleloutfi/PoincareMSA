@@ -2,8 +2,8 @@
   "dataset": "globins",
   "N": 252,
   "feature_dim": 3060,
-  "qlocal_full": 0.326671906480365,
-  "qglobal_full": 0.742822093954856,
-  "loss_full": 5.227986855940386,
-  "build_time_sec": 1.2831397000118159
+  "qlocal_full": 0.3327485564321936,
+  "qglobal_full": 0.7437064154721386,
+  "loss_full": 5.222235983068293,
+  "build_time_sec": 1.2824217999877874
 }

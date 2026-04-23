@@ -484,7 +484,10 @@ def construct_tensor_from_embedding(fpath, option="mean"):
     Supported keys in the saved file: `embedding`, `aae_embedding`.
     If the embedding has sequence length (L, D) it is mean-pooled.
     """
-    data = torch.load(fpath)
+    # weights_only=False is required for .pt files that contain numpy arrays
+    # (created before PyTorch 2.6 tightened the default).  These files come
+    # from trusted local sources (embeddings/ directory).
+    data = torch.load(fpath, weights_only=False)
 
     if "embedding" in data:
         emb = data["embedding"]

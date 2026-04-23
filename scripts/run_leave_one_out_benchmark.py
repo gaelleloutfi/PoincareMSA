@@ -364,19 +364,452 @@ def setup_output_dir(output_dir: str, dataset: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Stub functions (to be implemented in subsequent steps)
+# Data-loading layer
 # ---------------------------------------------------------------------------
+# Public entry point : load_dataset(args)  ->  DatasetBundle
+# The bundle carries everything later pipeline steps need.
+# ─────────────────────────────────────────────────────────────────────────
 
-def load_dataset(args: argparse.Namespace):
+from dataclasses import dataclass, field
+
+
+@dataclass
+class DatasetBundle:
     """
-    Load features and labels for the selected dataset.
+    Structured container for one loaded protein-family dataset.
+
+    Attributes
+    ----------
+    features : np.ndarray, shape (N, d)
+        Numeric feature matrix.  Each row is one protein.
+        For PSSM datasets this is the flattened PSSM matrix;
+        for PLM datasets this is the mean-pooled language-model embedding.
+    labels : np.ndarray[str], shape (N,)
+        Protein identifiers (file stem, e.g. "42") in the same row
+        order as `features`.
+    input_type : str
+        Either ``'pssm'`` or ``'plm'``, matching DATASET_REGISTRY.
+    data_path : str
+        Resolved absolute path to the data folder that was loaded.
+    annotations : pd.DataFrame | None
+        Optional annotation table, indexed (or join-able) on the
+        column given by `annotation_id_col`.  ``None`` if no
+        annotation file was found / specified.
+    annotation_id_col : str | None
+        Column name in `annotations` that contains the protein identifier
+        (same strings as `labels`).
+    """
+    features: np.ndarray
+    labels: np.ndarray
+    input_type: str
+    data_path: str
+    annotations: "pd.DataFrame | None" = field(default=None)
+    annotation_id_col: "str | None" = field(default=None)
+
+    # ------------------------------------------------------------------ #
+    # Convenience helpers                                                   #
+    # ------------------------------------------------------------------ #
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def feature_dim(self) -> int:
+        """Dimensionality of each feature vector."""
+        return self.features.shape[1]
+
+    def annotation_for(self, protein_id: str) -> "dict | None":
+        """
+        Return the annotation row for *protein_id* as a plain dict, or
+        ``None`` if annotations are not loaded or the id is not found.
+
+        The lookup is done on ``annotation_id_col`` (string comparison).
+        If ``annotation_id_col`` is ``None``, the DataFrame index is used.
+        """
+        return lookup_annotation(self.annotations, self.annotation_id_col, protein_id)
+
+
+# ─── Internal helpers ────────────────────────────────────────────────────
+
+def _validate_data_path(data_path: str, dataset_name: str) -> None:
+    """
+    Raise a clear ``FileNotFoundError`` if *data_path* does not exist or is
+    not a directory.
+    """
+    p = Path(data_path)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"[{dataset_name}] Data directory not found: {data_path}\n"
+            "Check DATASET_REGISTRY or override with --data_path."
+        )
+    if not p.is_dir():
+        raise NotADirectoryError(
+            f"[{dataset_name}] Expected a directory but got a file: {data_path}"
+        )
+
+
+def _validate_features_and_labels(
+    features: np.ndarray,
+    labels: np.ndarray,
+    dataset_name: str,
+    expected_ext: str,
+) -> None:
+    """
+    Run basic sanity checks on the loaded (features, labels) pair and raise
+    informative errors when something looks wrong.
+
+    Checks performed
+    ----------------
+    - At least one protein was loaded.
+    - ``features`` is 2-D and ``labels`` is 1-D.
+    - Row counts match.
+    - No NaN / Inf values in features.
+    - All feature vectors have non-zero variance (warn but do not raise).
+    """
+    n_feats, n_labels = len(features), len(labels)
+
+    if n_feats == 0:
+        raise ValueError(
+            f"[{dataset_name}] No proteins were loaded from the data directory.\n"
+            f"Expected files with extension '{expected_ext}'.  "
+            "Check the path and the DATASET_REGISTRY."
+        )
+    if features.ndim != 2:
+        raise ValueError(
+            f"[{dataset_name}] Feature matrix must be 2-D, got shape {features.shape}."
+        )
+    if labels.ndim != 1:
+        raise ValueError(
+            f"[{dataset_name}] Labels array must be 1-D, got shape {labels.shape}."
+        )
+    if n_feats != n_labels:
+        raise ValueError(
+            f"[{dataset_name}] Mismatch: {n_feats} feature rows vs {n_labels} labels."
+        )
+
+    n_nan = int(np.isnan(features).sum())
+    n_inf = int(np.isinf(features).sum())
+    if n_nan > 0 or n_inf > 0:
+        raise ValueError(
+            f"[{dataset_name}] Feature matrix contains {n_nan} NaN(s) and "
+            f"{n_inf} Inf value(s).  Check the source files."
+        )
+
+    # Warn about zero-variance dimensions (won't crash but may affect quality)
+    zero_var_dims = int((np.std(features, axis=0) == 0).sum())
+    if zero_var_dims > 0:
+        logger.warning(
+            "[%s] %d / %d feature dimensions have zero variance.",
+            dataset_name, zero_var_dims, features.shape[1],
+        )
+
+
+def _load_pssm_features(data_path: str, dataset_name: str) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Load PSSM features from a directory of ``.aamtx`` files.
+
+    Delegates to ``prepare_data()`` from
+    ``scripts/build_poincare_map/data.py``, which iterates over every
+    ``.aamtx`` file, flattens each one to a 1-D vector, and stacks them
+    into a feature matrix.
+
+    Parameters
+    ----------
+    data_path : str
+        Absolute path to the folder containing ``.aamtx`` files.
+        A ``0.aamtx`` file is treated as the phylogenetic root and is
+        *excluded* here (``withroot=False``) so that integer-named proteins
+        start from ``1``.  This matches how the rest of the pipeline works.
+    dataset_name : str
+        Used only in error messages.
 
     Returns
     -------
     features : np.ndarray, shape (N, d)
-    labels   : np.ndarray of str, shape (N,)
+    labels   : np.ndarray[str], shape (N,)
+        Labels are the file stem (e.g. ``"42"`` for ``42.aamtx``).
     """
-    raise NotImplementedError("load_dataset — to be implemented")
+    try:
+        from data import prepare_data  # noqa: PLC0415  (local import OK here)
+    except ImportError as exc:
+        raise ImportError(
+            "Cannot import 'prepare_data' from scripts/build_poincare_map/data.py.\n"
+            "Make sure the project root and build_poincare_map are on sys.path."
+        ) from exc
+
+    _validate_data_path(data_path, dataset_name)
+
+    # Count .aamtx files so we can give a helpful error if there are none
+    aamtx_files = [f for f in os.listdir(data_path) if f.endswith(".aamtx")]
+    if not aamtx_files:
+        raise FileNotFoundError(
+            f"[{dataset_name}] No .aamtx files found in: {data_path}\n"
+            "This dataset requires PSSM files produced by the prepare_data pipeline."
+        )
+
+    logger.debug(
+        "[%s] Found %d .aamtx files in %s",
+        dataset_name, len(aamtx_files), data_path,
+    )
+
+    # withroot=False: exclude the artificial root protein (0.aamtx)
+    features_tensor, labels = prepare_data(data_path, withroot=False, fmt=".aamtx")
+
+    features = features_tensor.numpy().astype(np.float64)
+    labels = np.array([str(lbl) for lbl in labels])
+
+    _validate_features_and_labels(features, labels, dataset_name, ".aamtx")
+    logger.info(
+        "[%s] Loaded PSSM features: %d proteins x %d dims  (from %s)",
+        dataset_name, features.shape[0], features.shape[1], data_path,
+    )
+    return features, labels
+
+
+def _load_plm_features(data_path: str, dataset_name: str) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Load protein language-model (PLM) features from a directory of ``.pt``
+    files.
+
+    Delegates to ``prepare_embedding_data()`` from
+    ``scripts/build_poincare_map/data.py``, which loads each ``.pt`` file
+    (a dict with an ``'embedding'`` key), mean-pools over the sequence
+    length dimension if necessary, and stacks the result into a matrix.
+
+    Parameters
+    ----------
+    data_path : str
+        Absolute path to the folder containing ``.pt`` embedding files.
+    dataset_name : str
+        Used only in error messages.
+
+    Returns
+    -------
+    features : np.ndarray, shape (N, d)
+    labels   : np.ndarray[str], shape (N,)
+        Labels are the file stem (e.g. ``"42"`` for ``42.pt``).
+    """
+    try:
+        from data import prepare_embedding_data  # noqa: PLC0415
+    except ImportError as exc:
+        raise ImportError(
+            "Cannot import 'prepare_embedding_data' from "
+            "scripts/build_poincare_map/data.py."
+        ) from exc
+
+    _validate_data_path(data_path, dataset_name)
+
+    pt_files = [f for f in os.listdir(data_path) if f.endswith(".pt")]
+    if not pt_files:
+        raise FileNotFoundError(
+            f"[{dataset_name}] No .pt files found in: {data_path}\n"
+            "This dataset requires PLM embedding files "
+            "(see embeddings/ankh_base_*)."
+        )
+
+    logger.debug(
+        "[%s] Found %d .pt files in %s",
+        dataset_name, len(pt_files), data_path,
+    )
+
+    # withroot is unused for PLM datasets (no root convention)
+    features_tensor, labels = prepare_embedding_data(data_path, withroot=True, fmt=".pt")
+
+    features = features_tensor.numpy().astype(np.float64)
+    labels = np.array([str(lbl) for lbl in labels])
+
+    _validate_features_and_labels(features, labels, dataset_name, ".pt")
+    logger.info(
+        "[%s] Loaded PLM features: %d proteins x %d dims  (from %s)",
+        dataset_name, features.shape[0], features.shape[1], data_path,
+    )
+    return features, labels
+
+
+# ─── Annotation helpers ──────────────────────────────────────────────────
+
+def load_annotations(annotation_path: "str | None", id_col: "str | None") -> "pd.DataFrame | None":
+    """
+    Load an annotation CSV and return it as a DataFrame.
+
+    Returns ``None`` if *annotation_path* is ``None`` or the file does not
+    exist (a warning is logged in the latter case so the user notices a
+    misconfigured path).
+
+    The ``id_col`` column is coerced to ``str`` so that it can be matched
+    against the string labels returned by the feature loaders.
+
+    Parameters
+    ----------
+    annotation_path : str | None
+        Absolute path to the annotation CSV file.
+    id_col : str | None
+        Column in the CSV that holds protein identifiers.  If ``None``,
+        the lookup falls back to the DataFrame integer index.
+
+    Returns
+    -------
+    pd.DataFrame | None
+    """
+    if annotation_path is None:
+        return None
+
+    path = Path(annotation_path)
+    if not path.exists():
+        logger.warning(
+            "Annotation file not found (skipping): %s", annotation_path
+        )
+        return None
+    if not path.suffix.lower() == ".csv":
+        logger.warning(
+            "Annotation file does not look like a CSV: %s  (will try anyway)",
+            annotation_path,
+        )
+
+    try:
+        df = pd.read_csv(annotation_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to read annotation file %s: %s", annotation_path, exc
+        )
+        return None
+
+    if df.empty:
+        logger.warning("Annotation file is empty: %s", annotation_path)
+        return None
+
+    # Coerce the identifier column to str for consistent matching
+    if id_col is not None:
+        if id_col not in df.columns:
+            logger.warning(
+                "Annotation id column '%s' not found in %s.\n"
+                "Available columns: %s",
+                id_col, annotation_path, list(df.columns),
+            )
+            # Return the raw dataframe anyway; annotation_for() will return None
+        else:
+            df[id_col] = df[id_col].astype(str)
+
+    logger.info(
+        "Loaded annotations: %d rows, %d columns  (id_col='%s')  from %s",
+        len(df), len(df.columns), id_col, annotation_path,
+    )
+    return df
+
+
+def lookup_annotation(
+    annotations: "pd.DataFrame | None",
+    id_col: "str | None",
+    protein_id: str,
+) -> "dict | None":
+    """
+    Return the annotation fields for a single protein as a plain dict.
+
+    Returns ``None`` when annotations are unavailable or the protein is
+    not found (rather than raising, so the benchmark loop stays robust).
+
+    Parameters
+    ----------
+    annotations : pd.DataFrame | None
+        The annotation table returned by :func:`load_annotations`.
+    id_col : str | None
+        Column to match on.  ``None`` means use the index.
+    protein_id : str
+        Identifier to look up (must match the strings stored in *id_col*).
+    """
+    if annotations is None:
+        return None
+
+    try:
+        if id_col is not None and id_col in annotations.columns:
+            matches = annotations[annotations[id_col] == str(protein_id)]
+        else:
+            # Fallback: try matching on index
+            matches = annotations[annotations.index.astype(str) == str(protein_id)]
+
+        if matches.empty:
+            return None
+
+        # Return the first matching row as a dict (drop NaN-only columns)
+        row = matches.iloc[0].dropna().to_dict()
+        return row
+
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "lookup_annotation failed for protein_id=%s: %s", protein_id, exc
+        )
+        return None
+
+
+# ─── Public entry point ──────────────────────────────────────────────────
+
+def load_dataset(args: argparse.Namespace) -> DatasetBundle:
+    """
+    Load the full feature matrix, labels, and annotations for the chosen
+    dataset and return them in a :class:`DatasetBundle`.
+
+    The function dispatches to the appropriate internal loader based on
+    ``args.input_type`` (``'pssm'`` or ``'plm'``), which is populated by
+    :func:`resolve_args` from the DATASET_REGISTRY.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed and resolved CLI arguments.  Relevant fields:
+
+        * ``args.dataset``        — name key (e.g. ``'globins'``)
+        * ``args.input_type``     — ``'pssm'`` | ``'plm'``
+        * ``args.data_path``      — resolved absolute path to data folder
+        * ``args.annotation_path``— resolved absolute path (or ``None``)
+        * ``args.annotation_id_col`` — column name for protein id (or ``None``)
+
+    Returns
+    -------
+    DatasetBundle
+        A fully validated bundle with ``features``, ``labels``, and
+        optionally ``annotations``.
+
+    Raises
+    ------
+    ValueError
+        If ``args.input_type`` is not ``'pssm'`` or ``'plm'``.
+    FileNotFoundError
+        If the data directory or expected feature files are missing.
+    """
+    dataset_name = args.dataset
+    input_type   = args.input_type
+    data_path    = args.data_path
+
+    logger.info(
+        "Loading dataset '%s' (input_type=%s) from %s",
+        dataset_name, input_type, data_path,
+    )
+
+    if input_type == "pssm":
+        features, labels = _load_pssm_features(data_path, dataset_name)
+    elif input_type == "plm":
+        features, labels = _load_plm_features(data_path, dataset_name)
+    else:
+        raise ValueError(
+            f"Unknown input_type '{input_type}' for dataset '{dataset_name}'.\n"
+            "Expected 'pssm' or 'plm'.  Check DATASET_REGISTRY."
+        )
+
+    annotations = load_annotations(args.annotation_path, args.annotation_id_col)
+
+    return DatasetBundle(
+        features=features,
+        labels=labels,
+        input_type=input_type,
+        data_path=data_path,
+        annotations=annotations,
+        annotation_id_col=args.annotation_id_col,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stub functions (to be implemented in subsequent steps)
+# ---------------------------------------------------------------------------
+
 
 
 def build_poincare_map(features: np.ndarray, args: argparse.Namespace, tmp_dir: str):
@@ -389,7 +822,64 @@ def build_poincare_map(features: np.ndarray, args: argparse.Namespace, tmp_dir: 
     loss         : float
     build_time   : float  (seconds, wall-clock)
     """
-    raise NotImplementedError("build_poincare_map — to be implemented")
+    import torch
+    from data import compute_rfa_w_custom_distance
+    from model import PoincareEmbedding, PoincareDistance
+    from rsgd import RiemannianSGD
+    from train import train
+
+    start = time.perf_counter()
+
+    # 1. Compute RFA Target Matrix
+    RFA = compute_rfa_w_custom_distance(
+        features=features,
+        distance_matrix=None,
+        k_neighbours=args.knn,
+        distfn=args.distfn,
+        connected=args.connected,
+        sigma=args.sigma,
+        distlocal=args.distlocal,
+        output_path=tmp_dir,
+    )
+
+    # 2. Setup Dataset & Model
+    indices = torch.arange(len(RFA))
+    dataset = torch.utils.data.TensorDataset(indices, RFA)
+
+    predictor = PoincareEmbedding(
+        len(dataset),
+        args.dim,
+        dist=PoincareDistance,
+        gamma=args.gamma,
+        lossfn=args.lossfn,
+        Qdist=args.distr,
+        cuda=False,
+    )
+    optimizer = RiemannianSGD(predictor.parameters(), lr=args.lr)
+
+    # 3. Setup Optimizer Options for train()
+    # The train() function expects an argparse Namespace with specific fields
+    class Opt: pass
+    opt = Opt()
+    N = len(features)
+    opt.batchsize = max(4, int(min(128, N // 10)))
+    opt.lr = args.lr
+    opt.lrm = 1.0
+    opt.epochs = args.epochs
+    opt.burnin = max(1, args.epochs // 2)
+    opt.checkout_freq = 100
+    opt.debugplot = 0
+    opt.earlystop = args.earlystop
+    opt.seed = args.seed
+
+    # 4. Train
+    fout_path = os.path.join(tmp_dir, 'tmp_map')
+    embeddings, loss, epoch = train(
+        predictor, dataset, optimizer, opt, fout=fout_path, earlystop=args.earlystop
+    )
+
+    build_time = time.perf_counter() - start
+    return np.array(embeddings), float(loss), float(build_time)
 
 
 def compute_quality(features: np.ndarray, embeddings: np.ndarray, args: argparse.Namespace):
@@ -401,8 +891,82 @@ def compute_quality(features: np.ndarray, embeddings: np.ndarray, args: argparse
     qlocal  : float
     qglobal : float
     """
-    raise NotImplementedError("compute_quality — to be implemented")
+    # Reuse the quality implementation from Breton's experimental script
+    try:
+        from experiments.new_benchmark_once import compute_quality_local
+    except ImportError as exc:
+        raise ImportError(
+            "Could not import 'compute_quality_local' from experiments.new_benchmark_once. "
+            "Ensure the project root is in sys.path."
+        ) from exc
 
+    qlocal, qglobal, _kmax, _df_score = compute_quality_local(
+        coord_high=features,
+        coord_low=embeddings,
+        setting='manifold',
+        k_neighbours=args.k_quality,
+        my_metric=args.distlocal,
+    )
+
+    return float(qlocal), float(qglobal)
+
+
+@dataclass
+class ReducedMapResult:
+    """
+    Container for the result of building a Poincaré map on N-1 proteins.
+    """
+    emb_red: np.ndarray
+    feats_reduced: np.ndarray
+    labels_reduced: np.ndarray
+    removed_feat: np.ndarray
+    removed_label: str
+    loss_red: float
+    build_time: float
+    qlocal_red: float
+    qglobal_red: float
+
+
+def build_reduced_map_for_removal(
+    remove_idx: int,
+    bundle: DatasetBundle,
+    args: argparse.Namespace,
+    tmp_dir: str,
+) -> ReducedMapResult:
+    """
+    Given the index of a protein to remove, constructs the N-1 feature
+    matrix, builds the reduced map, and computes its quality.
+    
+    Raises exceptions if map building fails, leaving it to the caller
+    to catch and log them.
+    """
+    N = len(bundle)
+    mask = np.ones(N, dtype=bool)
+    mask[remove_idx] = False
+    
+    feats_reduced = bundle.features[mask]
+    labels_reduced = bundle.labels[mask]
+    
+    removed_feat = bundle.features[remove_idx]
+    removed_label = str(bundle.labels[remove_idx])
+    
+    # 1. Build the map
+    emb_red, loss_red, build_time = build_poincare_map(feats_reduced, args, tmp_dir)
+    
+    # 2. Compute quality
+    qlocal_red, qglobal_red = compute_quality(feats_reduced, emb_red, args)
+    
+    return ReducedMapResult(
+        emb_red=emb_red,
+        feats_reduced=feats_reduced,
+        labels_reduced=labels_reduced,
+        removed_feat=removed_feat,
+        removed_label=removed_label,
+        loss_red=loss_red,
+        build_time=build_time,
+        qlocal_red=qlocal_red,
+        qglobal_red=qglobal_red,
+    )
 
 def sample_proteins_to_remove(
     embeddings_full: np.ndarray,
@@ -420,7 +984,53 @@ def sample_proteins_to_remove(
     -------
     indices : np.ndarray of int, shape (n_remove,)
     """
-    raise NotImplementedError("sample_proteins_to_remove — to be implemented")
+    N = len(embeddings_full)
+    if n_remove <= 0 or n_remove >= N:
+        logger.info("      n_remove=%d -> selecting ALL %d proteins.", n_remove, N)
+        return np.arange(N)
+
+    if mode == "random":
+        indices = rng.choice(N, size=n_remove, replace=False)
+        logger.info("      Sampled %d proteins randomly.", len(indices))
+        return indices
+    
+    if mode == "stratified_radius":
+        radii = np.linalg.norm(embeddings_full, axis=1)
+        
+        # 3 quantiles: [0, 33%], [33%, 66%], [66%, 100%]
+        q33 = np.quantile(radii, 0.3333)
+        q66 = np.quantile(radii, 0.6667)
+        
+        bin1_idx = np.where(radii <= q33)[0]
+        bin2_idx = np.where((radii > q33) & (radii <= q66))[0]
+        bin3_idx = np.where(radii > q66)[0]
+        
+        # Determine how many to sample from each bin (approx equally)
+        n_per_bin = n_remove // 3
+        remainder = n_remove % 3
+        
+        counts = [n_per_bin] * 3
+        for i in range(remainder):
+            counts[i] += 1
+            
+        sampled = []
+        for b_idx, count, b_name in zip([bin1_idx, bin2_idx, bin3_idx], counts, ["center", "mid", "periphery"]):
+            if count > len(b_idx):
+                logger.warning(
+                    "      Bin %s has only %d proteins, but %d requested. Sampling all.",
+                    b_name, len(b_idx), count
+                )
+                sample = b_idx
+            else:
+                sample = rng.choice(b_idx, size=count, replace=False)
+            sampled.extend(sample)
+            logger.info("      Bin %-9s (n=%3d): sampled %2d proteins", b_name, len(b_idx), len(sample))
+            
+        indices = np.array(sampled)
+        rng.shuffle(indices) # Shuffle the final list so iterations aren't sorted by radius
+        return indices
+
+    raise ValueError(f"Unknown sample_mode: {mode}")
 
 
 def compute_target_vector(
@@ -496,12 +1106,6 @@ def compute_neighbor_overlap(
     raise NotImplementedError("compute_neighbor_overlap — to be implemented")
 
 
-def load_annotations(annotation_path: str, id_col: str | None) -> pd.DataFrame | None:
-    """
-    Load an annotation CSV and return it as a DataFrame, or None if the path
-    is not set / does not exist.
-    """
-    raise NotImplementedError("load_annotations — to be implemented")
 
 
 def build_result_row(
@@ -576,10 +1180,15 @@ def run_benchmark(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # Step 1: Load features + labels
     # ------------------------------------------------------------------
-    logger.info("[1/5] Loading features …")
-    features, labels = load_dataset(args)
-    N = features.shape[0]
-    logger.info("      Loaded %d proteins, feature dim=%d", N, features.shape[1])
+    logger.info("[1/5] Loading features ...")
+    bundle = load_dataset(args)
+    features = bundle.features
+    labels   = bundle.labels
+    N = len(bundle)
+    logger.info(
+        "      Loaded %d proteins, feature dim=%d  (input_type=%s)",
+        N, bundle.feature_dim(), bundle.input_type,
+    )
 
     # ------------------------------------------------------------------
     # Step 2: Build full map
@@ -627,15 +1236,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
     )
     logger.info("      Selected %d proteins", len(remove_indices))
 
-    # ------------------------------------------------------------------
-    # Step 4: Load annotations (optional)
-    # ------------------------------------------------------------------
-    annotations_df = load_annotations(args.annotation_path, args.annotation_id_col)
-    if annotations_df is not None:
-        logger.info("      Loaded annotations (%d rows)", len(annotations_df))
+    # Annotations were loaded inside load_dataset and stored in the bundle.
+    if bundle.annotations is not None:
+        logger.info("      Annotations available (%d rows)", len(bundle.annotations))
 
     # ------------------------------------------------------------------
-    # Step 5: Leave-one-out loop
+    # Step 4: Leave-one-out loop
     # ------------------------------------------------------------------
     logger.info("[4/5] Starting leave-one-out iterations …")
     all_rows: list[dict] = []
@@ -643,27 +1249,18 @@ def run_benchmark(args: argparse.Namespace) -> None:
     n_err = 0
 
     for iter_idx, remove_idx in enumerate(remove_indices):
-        protein_id = str(labels[remove_idx])
+        protein_id = str(bundle.labels[remove_idx])
         logger.info(
             "  [iter %d/%d]  protein=%s  radius=%.4f",
             iter_idx + 1, len(remove_indices), protein_id, radii_full[remove_idx],
         )
 
         # --- a) Build reduced map (N-1 proteins) ----------------------
-        mask = np.ones(N, dtype=bool)
-        mask[remove_idx] = False
-        feats_reduced = features[mask]
-        labels_reduced = labels[mask]
-
         try:
             tmp_red = os.path.join(paths["base"], f"_tmp_reduced_{iter_idx:04d}")
             os.makedirs(tmp_red, exist_ok=True)
 
-            map_build_start = time.perf_counter()
-            emb_red, loss_red, _ = build_poincare_map(feats_reduced, args, tmp_red)
-            map_build_time = time.perf_counter() - map_build_start
-
-            qlocal_red, qglobal_red = compute_quality(feats_reduced, emb_red, args)
+            reduced_res = build_reduced_map_for_removal(remove_idx, bundle, args, tmp_red)
 
         except Exception as exc:
             logger.warning("    Reduced map FAILED for %s: %s", protein_id, exc)
@@ -672,9 +1269,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
             continue
 
         # --- b) Compute insertion target vector -----------------------
-        removed_feat = features[remove_idx]
         target = compute_target_vector(
-            removed_feat, feats_reduced, args.gamma, args.distlocal
+            reduced_res.removed_feat, reduced_res.feats_reduced, args.gamma, args.distlocal
         )
 
         # --- c) Instantiate model loaded with reduced embeddings ------
@@ -695,7 +1291,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 # --- g) Q-metrics after insertion ---------------------
                 # Reconstruct combined embedding: N-1 reduced + 1 inserted
                 # (position of the removed protein inserted at remove_idx)
-                emb_after = np.insert(emb_red, remove_idx, new_emb.reshape(1, -1), axis=0)
+                emb_after = np.insert(reduced_res.emb_red, remove_idx, new_emb.reshape(1, -1), axis=0)
                 qlocal_after, qglobal_after = compute_quality(features, emb_after, args)
 
                 # --- h) Neighbour overlap & density proxy -------------
@@ -703,7 +1299,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 neighbor_overlaps: dict[int, float] = {}
                 for k in args.neighbor_overlap_k:
                     neighbor_overlaps[k] = compute_neighbor_overlap(
-                        emb_full, remove_idx, new_emb, emb_red, k
+                        emb_full, remove_idx, new_emb, reduced_res.emb_red, k
                     )
 
                 # Local density proxy: mean hyperbolic distance to top-5
@@ -721,10 +1317,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
                     protein_id=protein_id,
                     method=method_name,
                     sample_mode=args.sample_mode,
-                    map_build_time=map_build_time,
+                    map_build_time=reduced_res.build_time,
                     insertion_time=insertion_time,
-                    qlocal_reduced_before=qlocal_red,
-                    qglobal_reduced_before=qglobal_red,
+                    qlocal_reduced_before=reduced_res.qlocal_red,
+                    qglobal_reduced_before=reduced_res.qglobal_red,
                     qlocal_after=qlocal_after,
                     qglobal_after=qglobal_after,
                     full_map_radius=float(radii_full[remove_idx]),
@@ -739,8 +1335,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 logger.info(
                     "    OK  %s  dQlocal=%+.4f  dQglobal=%+.4f  t=%.2fs",
                     method_name,
-                    qlocal_after - qlocal_red,
-                    qglobal_after - qglobal_red,
+                    qlocal_after - reduced_res.qlocal_red,
+                    qglobal_after - reduced_res.qglobal_red,
                     insertion_time,
                 )
 

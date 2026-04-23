@@ -1042,17 +1042,46 @@ def compute_target_vector(
     """
     Compute the target RFA-like probability vector for the removed protein
     w.r.t. the remaining proteins' feature space.
+    
+    This matches the baseline implementation: distances are computed using
+    `distlocal` (e.g. cosine) and transformed into weights via a simple
+    exponential kernel `exp(-gamma * d)`.
 
     Returns
     -------
     target : np.ndarray, shape (N-1,)
+        Normalized probability distribution summing to 1.
     """
-    raise NotImplementedError("compute_target_vector — to be implemented")
+    from sklearn.metrics.pairwise import pairwise_distances
+    
+    removed_feat_2d = removed_feat.reshape(1, -1)
+    
+    # 1. Distances to all remaining points in feature space
+    d = pairwise_distances(removed_feat_2d, remaining_feats, metric=distlocal).flatten()
+    
+    # 2. Kernel to probabilities
+    target = np.exp(-gamma * d)
+    
+    # 3. Normalize
+    if target.sum() <= 0:
+        target = np.ones_like(target) / float(len(target))
+    else:
+        target = target / target.sum()
+        
+    return target
 
 
 def insert_method1_bary(model, target: np.ndarray) -> tuple[np.ndarray, float]:
     """
     Method 1: pure hyperbolic barycenter (no gradient optimisation).
+    
+    Inputs needed:
+    - model: An initialized `PoincareEmbedding` populated with the N-1 
+             reduced map embeddings (`model.lt.weight`).
+    - target: A 1D numpy array of length N-1 representing the target 
+              RFA probabilities (weights) of the new point.
+              
+    (Note: This simply wraps `model.hyperbolic_barycenter`).
 
     Returns
     -------
@@ -1067,6 +1096,15 @@ def insert_method2_rand(
 ) -> tuple[np.ndarray, float]:
     """
     Method 2: infer_embedding_for_point with random initialisation.
+    
+    Inputs needed:
+    - model: An initialized `PoincareEmbedding` populated with the N-1 
+             reduced map embeddings (`model.lt.weight`).
+    - target: A 1D numpy array of length N-1 representing the target 
+              RFA probabilities.
+    - args: Used to extract `n_steps_insert`, `lr_insert`, `k_quality`.
+    
+    (Note: This simply wraps `model.infer_embedding_for_point(init='random')`).
 
     Returns
     -------
@@ -1081,6 +1119,15 @@ def insert_method3_bary(
 ) -> tuple[np.ndarray, float]:
     """
     Method 3: infer_embedding_for_point with barycenter initialisation.
+    
+    Inputs needed:
+    - model: An initialized `PoincareEmbedding` populated with the N-1 
+             reduced map embeddings (`model.lt.weight`).
+    - target: A 1D numpy array of length N-1 representing the target 
+              RFA probabilities.
+    - args: Used to extract `n_steps_insert`, `lr_insert`, `k_quality`.
+    
+    (Note: This simply wraps `model.infer_embedding_for_point(init='barycenter')`).
 
     Returns
     -------
@@ -1274,8 +1321,21 @@ def run_benchmark(args: argparse.Namespace) -> None:
         )
 
         # --- c) Instantiate model loaded with reduced embeddings ------
-        # (stub: model construction deferred to implementation step)
-        model = None   # placeholder
+        import torch
+        from model import PoincareEmbedding
+        
+        dim = reduced_res.emb_red.shape[1]
+        model = PoincareEmbedding(
+            size=reduced_res.emb_red.shape[0],
+            dim=dim,
+            gamma=args.gamma,
+            lossfn=args.lossfn,
+            Qdist=args.distr,
+            cuda=False
+        )
+        # Load the reduced map geometry into the model
+        with torch.no_grad():
+            model.lt.weight.data = torch.from_numpy(reduced_res.emb_red).float()
 
         # --- d-f) Run each insertion method ---------------------------
         methods = {

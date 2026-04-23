@@ -1,3 +1,9 @@
 {"dataset": "globins", "protein_id": "119", "method": "bary_init", "error": "NotImplementedError", "message": "insert_method1_bary \u2014 to be implemented", "timestamp": "2026-04-23T10:53:52"}
 {"dataset": "globins", "protein_id": "119", "method": "infer_rand", "error": "NotImplementedError", "message": "insert_method2_rand \u2014 to be implemented", "timestamp": "2026-04-23T10:53:52"}
 {"dataset": "globins", "protein_id": "119", "method": "infer_bary", "error": "NotImplementedError", "message": "insert_method3_bary \u2014 to be implemented", "timestamp": "2026-04-23T10:53:52"}
+{"dataset": "globins", "protein_id": "11", "method": "bary_init", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:05:38"}
+{"dataset": "globins", "protein_id": "11", "method": "infer_rand", "error": "TypeError", "message": "PoincareEmbedding.infer_embedding_for_point() got an unexpected keyword argument 'k'", "timestamp": "2026-04-23T11:05:39"}
+{"dataset": "globins", "protein_id": "11", "method": "infer_bary", "error": "TypeError", "message": "PoincareEmbedding.infer_embedding_for_point() got an unexpected keyword argument 'k'", "timestamp": "2026-04-23T11:05:39"}
+{"dataset": "globins", "protein_id": "119", "method": "bary_init", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:08:16"}
+{"dataset": "globins", "protein_id": "119", "method": "infer_rand", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:08:17"}
+{"dataset": "globins", "protein_id": "119", "method": "infer_bary", "error": "NotImplementedError", "message": "compute_neighbor_overlap \u2014 to be implemented", "timestamp": "2026-04-23T11:08:17"}

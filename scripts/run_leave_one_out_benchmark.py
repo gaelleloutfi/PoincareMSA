@@ -1071,7 +1071,9 @@ def compute_target_vector(
     return target
 
 
-def insert_method1_bary(model, target: np.ndarray) -> tuple[np.ndarray, float]:
+def insert_method1_bary(
+    model, target: np.ndarray, args: argparse.Namespace
+) -> tuple[np.ndarray, float]:
     """
     Method 1: pure hyperbolic barycenter (no gradient optimisation).
     
@@ -1080,6 +1082,7 @@ def insert_method1_bary(model, target: np.ndarray) -> tuple[np.ndarray, float]:
              reduced map embeddings (`model.lt.weight`).
     - target: A 1D numpy array of length N-1 representing the target 
               RFA probabilities (weights) of the new point.
+    - args: Used to extract `knn`.
               
     (Note: This simply wraps `model.hyperbolic_barycenter`).
 
@@ -1088,7 +1091,27 @@ def insert_method1_bary(model, target: np.ndarray) -> tuple[np.ndarray, float]:
     embedding   : np.ndarray, shape (dim,)
     elapsed_sec : float
     """
-    raise NotImplementedError("insert_method1_bary — to be implemented")
+    import torch
+    import time
+    
+    start = time.perf_counter()
+    with torch.no_grad():
+        target_tensor = torch.from_numpy(target).float()
+        
+        # Use top-K neighbors to compute the barycenter, mimicking model.py logic
+        k_local = min(max(1, args.knn), target_tensor.numel())
+        topk = torch.topk(target_tensor, k=k_local).indices
+        
+        neighbor_embs = model.lt.weight.data[topk]
+        neighbor_w = target_tensor[topk]
+        neighbor_w = neighbor_w / neighbor_w.sum()
+        
+        v = model.hyperbolic_barycenter(
+            neighbor_embs, neighbor_w, n_steps=100, tol=1e-7, alpha=1.0, device='cpu'
+        )
+        
+    insertion_time = time.perf_counter() - start
+    return v.detach().cpu().numpy().flatten(), insertion_time
 
 
 def insert_method2_rand(
@@ -1111,7 +1134,21 @@ def insert_method2_rand(
     embedding   : np.ndarray, shape (dim,)
     elapsed_sec : float
     """
-    raise NotImplementedError("insert_method2_rand — to be implemented")
+    import torch
+    import time
+    
+    target_tensor = torch.from_numpy(target).float()
+    start = time.perf_counter()
+    
+    new_emb, _losses = model.infer_embedding_for_point(
+        target_tensor,
+        init='random',
+        lr=args.lr_insert,
+        n_steps=args.n_steps_insert
+    )
+    
+    insertion_time = time.perf_counter() - start
+    return new_emb, insertion_time
 
 
 def insert_method3_bary(
@@ -1134,7 +1171,21 @@ def insert_method3_bary(
     embedding   : np.ndarray, shape (dim,)
     elapsed_sec : float
     """
-    raise NotImplementedError("insert_method3_bary — to be implemented")
+    import torch
+    import time
+    
+    target_tensor = torch.from_numpy(target).float()
+    start = time.perf_counter()
+    
+    new_emb, _losses = model.infer_embedding_for_point(
+        target_tensor,
+        init='barycenter',
+        lr=args.lr_insert,
+        n_steps=args.n_steps_insert
+    )
+    
+    insertion_time = time.perf_counter() - start
+    return new_emb, insertion_time
 
 
 def compute_neighbor_overlap(
@@ -1339,7 +1390,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
         # --- d-f) Run each insertion method ---------------------------
         methods = {
-            "bary_init":  lambda: insert_method1_bary(model, target),
+            "bary_init":  lambda: insert_method1_bary(model, target, args),
             "infer_rand": lambda: insert_method2_rand(model, target, args),
             "infer_bary": lambda: insert_method3_bary(model, target, args),
         }

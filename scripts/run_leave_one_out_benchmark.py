@@ -52,6 +52,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import torch
+from sklearn.metrics.pairwise import pairwise_distances
 
 # ---------------------------------------------------------------------------
 # Path setup — make project root importable regardless of CWD
@@ -822,7 +824,6 @@ def build_poincare_map(features: np.ndarray, args: argparse.Namespace, tmp_dir: 
     loss         : float
     build_time   : float  (seconds, wall-clock)
     """
-    import torch
     from data import compute_rfa_w_custom_distance
     from model import PoincareEmbedding, PoincareDistance
     from rsgd import RiemannianSGD
@@ -1091,9 +1092,6 @@ def insert_method1_bary(
     embedding   : np.ndarray, shape (dim,)
     elapsed_sec : float
     """
-    import torch
-    import time
-    
     start = time.perf_counter()
     with torch.no_grad():
         target_tensor = torch.from_numpy(target).float()
@@ -1134,9 +1132,6 @@ def insert_method2_rand(
     embedding   : np.ndarray, shape (dim,)
     elapsed_sec : float
     """
-    import torch
-    import time
-    
     target_tensor = torch.from_numpy(target).float()
     start = time.perf_counter()
     
@@ -1171,9 +1166,6 @@ def insert_method3_bary(
     embedding   : np.ndarray, shape (dim,)
     elapsed_sec : float
     """
-    import torch
-    import time
-    
     target_tensor = torch.from_numpy(target).float()
     start = time.perf_counter()
     
@@ -1196,7 +1188,6 @@ def poincare_pairwise_cross(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     y: (M, dim)
     Returns: (N, M) distance matrix.
     """
-    from sklearn.metrics.pairwise import pairwise_distances
     x = x.astype(np.float64)
     y = y.astype(np.float64)
     norm2_x = np.sum(x * x, axis=1)
@@ -1298,8 +1289,6 @@ def build_result_row(
 
 def append_row_to_partial(row: dict, partial_path: str) -> None:
     """Append a single result row to the partial CSV checkpoint file."""
-    import os
-    import pandas as pd
     df = pd.DataFrame([row])
     header = not os.path.exists(partial_path)
     df.to_csv(partial_path, mode='a', index=False, header=header)
@@ -1324,7 +1313,33 @@ def save_summary_tables(results_df: pd.DataFrame, output_dir: str) -> None:
     Generate and save summary_by_method.csv and summary_by_radial_bin.csv
     from the final results DataFrame.
     """
-    raise NotImplementedError("save_summary_tables — to be implemented")
+    # Define the core metrics to average
+    metric_cols = [
+        "map_build_time", "insertion_time", 
+        "delta_Qlocal", "delta_Qglobal", 
+        "local_density_proxy"
+    ]
+    metric_cols += [c for c in results_df.columns if "neighbor_overlap" in c]
+    metric_cols = [c for c in metric_cols if c in results_df.columns]
+    
+    # 1. Summary by method
+    summary_method = results_df.groupby("method")[metric_cols].mean().reset_index()
+    summary_method.to_csv(os.path.join(output_dir, "reports", "summary_by_method.csv"), index=False)
+    
+    # 2. Summary by radial bin
+    if "full_map_radius" in results_df.columns and len(results_df) > 2:
+        # Create bins based on quantiles to mimic the stratified sampling
+        try:
+            results_df["radial_bin"] = pd.qcut(
+                results_df["full_map_radius"], 
+                q=3, 
+                labels=["center", "mid", "periphery"]
+            )
+            summary_radial = results_df.groupby(["method", "radial_bin"], observed=False)[metric_cols].mean().reset_index()
+            summary_radial.to_csv(os.path.join(output_dir, "reports", "summary_by_radial_bin.csv"), index=False)
+        except Exception as e:
+            # Fallback if there are not enough distinct values for quantiles
+            print(f"Warning: Could not create radial bins for summary: {e}")
 
 
 # ---------------------------------------------------------------------------

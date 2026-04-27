@@ -9,8 +9,6 @@ import argparse
 import logging
 import os
 import sys
-from pathlib import Path
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -23,30 +21,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+# Metrics shared across all plot/stat functions
+PLOT_METRICS: dict[str, tuple[str, str]] = {
+    "delta_qlocal":   ("Delta Q_local",     "Delta Q_local"),
+    "delta_qglobal":  ("Delta Q_global",    "Delta Q_global"),
+    "insertion_time": ("Insertion Time (s)", "Insertion Time (s)"),
+}
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze Leave-One-Out Benchmark Results")
-    
+    parser = argparse.ArgumentParser(
+        description="Analyze Leave-One-Out Benchmark Results",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "--results_dir",
         type=str,
         default="benchmark_results",
-        help="Directory containing per_iteration_results.csv"
+        help="Directory containing per_iteration_results.csv",
     )
-    
     parser.add_argument(
         "--output_dir",
         type=str,
         default="benchmark_results/figures",
-        help="Directory where figures will be saved"
+        help="Directory where figures (.png) will be saved",
     )
-    
+    parser.add_argument(
+        "--stats_dir",
+        type=str,
+        default="",
+        help="Directory where CSV summaries will be saved. "
+             "Defaults to --results_dir when left empty.",
+    )
     parser.add_argument(
         "--datasets",
         type=str,
         default="",
-        help="Comma-separated list of datasets to analyze. If empty, all found in CSV are used."
+        help="Comma-separated datasets to analyse. Empty = all found in CSV.",
     )
-    
     return parser.parse_args()
 
 def load_results(results_dir: str) -> pd.DataFrame:
@@ -106,46 +121,34 @@ def generate_boxplots(df: pd.DataFrame, output_dir: str):
     Generate boxplots for delta_Qlocal, delta_Qglobal, and insertion_time.
     """
     logger.info("Generating boxplots...")
-    metrics = {
-        "delta_qlocal": ("Delta Q_local", "Delta Q_local"),
-        "delta_qglobal": ("Delta Q_global", "Delta Q_global"),
-        "insertion_time": ("Insertion Time (s)", "Insertion Time (s)")
-    }
-    
-    # 1. Aggregated (all datasets)
-    for metric, (title, ylabel) in metrics.items():
-        if metric in df.columns:
-            _plot_metric(df, metric, f"Aggregated {title} by Method", ylabel, 'boxplot', output_dir, "boxplot_aggregated")
-            
-    # 2. Per dataset
-    for dataset in df["dataset"].unique():
-        ds_df = df[df["dataset"] == dataset]
-        for metric, (title, ylabel) in metrics.items():
-            if metric in ds_df.columns:
-                _plot_metric(ds_df, metric, f"{dataset}: {title} by Method", ylabel, 'boxplot', output_dir, f"boxplot_{dataset}")
+    for metric, (title, ylabel) in PLOT_METRICS.items():
+        if metric not in df.columns:
+            continue
+        # Aggregated
+        _plot_metric(df, metric, f"Aggregated {title} by Method",
+                     ylabel, 'boxplot', output_dir, "boxplot_aggregated")
+        # Per dataset
+        for dataset in df["dataset"].unique():
+            ds_df = df[df["dataset"] == dataset]
+            _plot_metric(ds_df, metric, f"{dataset}: {title} by Method",
+                         ylabel, 'boxplot', output_dir, f"boxplot_{dataset}")
 
 def generate_violin_plots(df: pd.DataFrame, output_dir: str):
     """
     Generate violin plots for delta metrics and runtime.
     """
     logger.info("Generating violin plots...")
-    metrics = {
-        "delta_qlocal": ("Delta Q_local", "Delta Q_local"),
-        "delta_qglobal": ("Delta Q_global", "Delta Q_global"),
-        "insertion_time": ("Insertion Time (s)", "Insertion Time (s)")
-    }
-    
-    # 1. Aggregated (all datasets)
-    for metric, (title, ylabel) in metrics.items():
-        if metric in df.columns:
-            _plot_metric(df, metric, f"Aggregated {title} by Method", ylabel, 'violinplot', output_dir, "violin_aggregated")
-            
-    # 2. Per dataset
-    for dataset in df["dataset"].unique():
-        ds_df = df[df["dataset"] == dataset]
-        for metric, (title, ylabel) in metrics.items():
-            if metric in ds_df.columns:
-                _plot_metric(ds_df, metric, f"{dataset}: {title} by Method", ylabel, 'violinplot', output_dir, f"violin_{dataset}")
+    for metric, (title, ylabel) in PLOT_METRICS.items():
+        if metric not in df.columns:
+            continue
+        # Aggregated
+        _plot_metric(df, metric, f"Aggregated {title} by Method",
+                     ylabel, 'violinplot', output_dir, "violin_aggregated")
+        # Per dataset
+        for dataset in df["dataset"].unique():
+            ds_df = df[df["dataset"] == dataset]
+            _plot_metric(ds_df, metric, f"{dataset}: {title} by Method",
+                         ylabel, 'violinplot', output_dir, f"violin_{dataset}")
 
 def _plot_scatter(df: pd.DataFrame, x_metric: str, y_metric: str, title: str, xlabel: str, ylabel: str, output_dir: str, file_prefix: str):
     """
@@ -169,33 +172,21 @@ def generate_scatter_plots(df: pd.DataFrame, output_dir: str):
         logger.warning("full_map_radius not found, skipping scatter plots.")
         return
         
-    metrics = {
-        "delta_qlocal": ("Delta Q_local", "Delta Q_local"),
-        "delta_qglobal": ("Delta Q_global", "Delta Q_global"),
-        "insertion_time": ("Insertion Time (s)", "Insertion Time (s)")
-    }
-    
-    # 1. Aggregated (all datasets)
-    for metric, (title, ylabel) in metrics.items():
-        if metric in df.columns:
-            _plot_scatter(
-                df, "full_map_radius", metric,
-                f"Aggregated: Radius vs {title}",
-                "Full Map Radius", ylabel,
-                output_dir, "scatter_aggregated"
-            )
-            
-    # 2. Per dataset
-    for dataset in df["dataset"].unique():
-        ds_df = df[df["dataset"] == dataset]
-        for metric, (title, ylabel) in metrics.items():
-            if metric in ds_df.columns:
-                _plot_scatter(
-                    ds_df, "full_map_radius", metric,
-                    f"{dataset}: Radius vs {title}",
-                    "Full Map Radius", ylabel,
-                    output_dir, f"scatter_{dataset}"
-                )
+    for metric, (title, ylabel) in PLOT_METRICS.items():
+        if metric not in df.columns:
+            continue
+        # Aggregated
+        _plot_scatter(df, "full_map_radius", metric,
+                      f"Aggregated: Radius vs {title}",
+                      "Full Map Radius", ylabel,
+                      output_dir, "scatter_aggregated")
+        # Per dataset
+        for dataset in df["dataset"].unique():
+            ds_df = df[df["dataset"] == dataset]
+            _plot_scatter(ds_df, "full_map_radius", metric,
+                          f"{dataset}: Radius vs {title}",
+                          "Full Map Radius", ylabel,
+                          output_dir, f"scatter_{dataset}")
 
 def compute_summary_statistics(df: pd.DataFrame, output_dir: str):
     """
@@ -276,6 +267,45 @@ def analyze_outliers(df: pd.DataFrame, output_dir: str):
         logger.info(f"Saved outlier overlap matrix to {overlap_path}")
     except Exception as e:
         logger.warning(f"Could not compute outlier overlap matrix: {e}")
+        
+    outliers_only = outlier_df[outlier_df["is_outlier"]]
+    outliers_summary_path = os.path.join(output_dir, "outliers_summary.csv")
+    outliers_only.to_csv(outliers_summary_path, index=False)
+    logger.info(f"Saved {len(outliers_only)} identified outliers to {outliers_summary_path}")
+    
+    return outlier_df
+
+def generate_outlier_plots(outlier_df: pd.DataFrame, output_dir: str):
+    """
+    Generate scatter plots highlighting outlier examples for delta_Qlocal per method.
+    """
+    logger.info("Generating outlier visualization plots...")
+    if outlier_df is None or "is_outlier" not in outlier_df.columns or "full_map_radius" not in outlier_df.columns:
+        logger.warning("Required columns for outlier plots not found, skipping.")
+        return
+        
+    for method in outlier_df["method"].unique():
+        method_df = outlier_df[outlier_df["method"] == method]
+        if not method_df["is_outlier"].any():
+            continue
+            
+        plt.figure(figsize=(10, 6))
+        sns.scatterplot(
+            data=method_df, 
+            x="full_map_radius", 
+            y="delta_qlocal", 
+            hue="is_outlier", 
+            palette={False: "gray", True: "red"},
+            style="is_outlier",
+            alpha=0.7
+        )
+        plt.title(f"Outliers for {method}: Radius vs Delta Q_local")
+        plt.xlabel("Full Map Radius")
+        plt.ylabel("Delta Q_local")
+        plt.tight_layout()
+        
+        plt.savefig(os.path.join(output_dir, f"outlier_examples_{method}.png"))
+        plt.close()
 
 def analyze_radial_bins(df: pd.DataFrame, output_dir: str):
     """
@@ -340,58 +370,123 @@ def compute_correlations(df: pd.DataFrame, output_dir: str):
     corr_df.to_csv(corr_path, index=False)
     logger.info(f"Saved Spearman correlations to {corr_path}")
 
-def generate_markdown_report(df, output_dir: str):
+def generate_markdown_report(df: pd.DataFrame, figures_dir: str, report_dir: str):
     """
     Generate a markdown summary report of the findings.
-    TODO: Create the markdown string and write to file.
     """
     logger.info("Generating markdown report...")
-    pass
+    
+    report_path = os.path.join(report_dir, "leave_one_out_benchmark_summary.md")
+    
+    datasets_analyzed = df["dataset"].unique()
+    methods = df["method"].unique()
+    num_rows = len(df)
+    
+    # Load CSVs
+    try:
+        summary_stats = pd.read_csv(os.path.join(figures_dir, "summary_statistics.csv")).to_markdown(index=False)
+    except Exception:
+        summary_stats = "*Data not available*"
+        
+    try:
+        corr_stats = pd.read_csv(os.path.join(figures_dir, "spearman_correlations.csv")).to_markdown(index=False)
+    except Exception:
+        corr_stats = "*Data not available*"
+        
+    try:
+        outlier_summary = pd.read_csv(os.path.join(figures_dir, "outliers_summary.csv"))
+        num_outliers = len(outlier_summary)
+    except Exception:
+        num_outliers = 0
+        
+    try:
+        bin_stats = pd.read_csv(os.path.join(figures_dir, "radial_bin_summary.csv")).to_markdown(index=False)
+    except Exception:
+        bin_stats = "*Data not available*"
+
+    lines = [
+        "# Leave-One-Out Benchmark Summary",
+        "",
+        "## Datasets and Scope",
+        f"- **Datasets Analyzed**: {', '.join(datasets_analyzed)}",
+        f"- **Total Rows**: {num_rows}",
+        f"- **Methods Evaluated**: {', '.join(methods)}",
+        "",
+        "## Per-Method Performance Trends",
+        "Summary statistics for `delta_qlocal`, `delta_qglobal`, and `insertion_time`.",
+        "",
+        summary_stats,
+        "",
+        "## Radial-Bin Trends",
+        "Performance variations depending on the protein's radial position in the full map.",
+        "",
+        bin_stats,
+        "",
+        "## Correlation Results",
+        "Spearman rank correlations between `full_map_radius` and delta metrics.",
+        "",
+        corr_stats,
+        "",
+        "## Outlier Summary",
+        f"A total of **{num_outliers}** outliers were identified using the Tukey 1.5 IQR rule for `delta_qlocal`.",
+        "Detailed overlapping matrices and raw outlier rows are available in the generated CSV files."
+    ]
+    
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+        
+    logger.info(f"Markdown report generated at: {report_path}")
 
 def main():
     args = parse_args()
-    
-    # 1. Setup output directory
+
+    # Resolve stats_dir (CSV summaries) — separate from figures output_dir
+    stats_dir = args.stats_dir if args.stats_dir else args.results_dir
+
+    # 1. Ensure output directories exist
     os.makedirs(args.output_dir, exist_ok=True)
-    logger.info(f"Output directory ready: {args.output_dir}")
-    
-    # 2. Load results
+    os.makedirs(stats_dir, exist_ok=True)
+    logger.info("Figures dir : %s", args.output_dir)
+    logger.info("Stats dir   : %s", stats_dir)
+
+    # 2. Load and validate results
     df = load_results(args.results_dir)
-    
-    # 3. Filter by dataset if requested
+
+    # 3. Optionally filter to requested datasets
     if args.datasets:
         datasets_to_keep = [d.strip() for d in args.datasets.split(",") if d.strip()]
-        logger.info(f"Filtering datasets to: {datasets_to_keep}")
-        
-        # Validate that the requested datasets exist in the data
-        available_datasets = set(df["dataset"].unique())
+        logger.info("Filtering datasets to: %s", datasets_to_keep)
+        available = set(df["dataset"].unique())
         for d in datasets_to_keep:
-            if d not in available_datasets:
-                logger.warning(f"Requested dataset '{d}' not found in the results.")
-                
+            if d not in available:
+                logger.warning("Requested dataset '%s' not found in results.", d)
         df = df[df["dataset"].isin(datasets_to_keep)].copy()
-        
         if len(df) == 0:
             logger.error("No data remaining after dataset filtering.")
             sys.exit(1)
-            
-        logger.info(f"Data remaining after filtering: {len(df)} rows.")
-    
-    # 4. Generate plots and analyses
+        logger.info("Rows after filtering: %d", len(df))
+
+    # 4. Generate figures
     generate_boxplots(df, args.output_dir)
     generate_violin_plots(df, args.output_dir)
     generate_scatter_plots(df, args.output_dir)
-    compute_summary_statistics(df, args.output_dir)
-    analyze_outliers(df, args.output_dir)
-    analyze_radial_bins(df, args.output_dir)
-    compute_correlations(df, args.output_dir)
-    
-    # 5. Generate final report
-    # report_dir = os.path.join(os.path.dirname(args.output_dir), "reports")
-    # os.makedirs(report_dir, exist_ok=True)
-    # generate_markdown_report(df, report_dir)
-    
-    logger.info("Phase 2 Analysis skeleton complete.")
+
+    # 5. Compute statistics → written to stats_dir
+    compute_summary_statistics(df, stats_dir)
+    outlier_df = analyze_outliers(df, stats_dir)
+    analyze_radial_bins(df, stats_dir)
+    compute_correlations(df, stats_dir)
+
+    # 6. Outlier visualisations (reads from stats_dir, writes to output_dir)
+    if outlier_df is not None:
+        generate_outlier_plots(outlier_df, args.output_dir)
+
+    # 7. Markdown report — anchored to results_dir, not output_dir
+    report_dir = os.path.join(args.results_dir, "reports")
+    os.makedirs(report_dir, exist_ok=True)
+    generate_markdown_report(df, stats_dir, report_dir)
+
+    logger.info("Phase 2 analysis complete.")
 
 if __name__ == "__main__":
     main()

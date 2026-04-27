@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Configure logging
 logging.basicConfig(
@@ -81,29 +83,119 @@ def load_results(results_dir: str) -> pd.DataFrame:
     logger.info(f"Successfully loaded {len(df)} rows across {df['dataset'].nunique()} dataset(s).")
     return df
 
-def generate_boxplots(df, output_dir: str):
+def _plot_metric(df: pd.DataFrame, metric: str, title: str, ylabel: str, plot_type: str, output_dir: str, file_prefix: str):
+    """
+    Helper to generate a single plot for a given metric across methods.
+    plot_type: 'boxplot' or 'violinplot'
+    """
+    plt.figure(figsize=(10, 6))
+    if plot_type == 'boxplot':
+        sns.boxplot(data=df, x="method", y=metric)
+    elif plot_type == 'violinplot':
+        sns.violinplot(data=df, x="method", y=metric)
+        
+    plt.title(title)
+    plt.ylabel(ylabel)
+    plt.xlabel("Method")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"{file_prefix}_{metric}.png"))
+    plt.close()
+
+def generate_boxplots(df: pd.DataFrame, output_dir: str):
     """
     Generate boxplots for delta_Qlocal, delta_Qglobal, and insertion_time.
-    TODO: Implement seaborn/matplotlib boxplots.
     """
     logger.info("Generating boxplots...")
-    pass
+    metrics = {
+        "delta_qlocal": ("Delta Q_local", "Delta Q_local"),
+        "delta_qglobal": ("Delta Q_global", "Delta Q_global"),
+        "insertion_time": ("Insertion Time (s)", "Insertion Time (s)")
+    }
+    
+    # 1. Aggregated (all datasets)
+    for metric, (title, ylabel) in metrics.items():
+        if metric in df.columns:
+            _plot_metric(df, metric, f"Aggregated {title} by Method", ylabel, 'boxplot', output_dir, "boxplot_aggregated")
+            
+    # 2. Per dataset
+    for dataset in df["dataset"].unique():
+        ds_df = df[df["dataset"] == dataset]
+        for metric, (title, ylabel) in metrics.items():
+            if metric in ds_df.columns:
+                _plot_metric(ds_df, metric, f"{dataset}: {title} by Method", ylabel, 'boxplot', output_dir, f"boxplot_{dataset}")
 
-def generate_violin_plots(df, output_dir: str):
+def generate_violin_plots(df: pd.DataFrame, output_dir: str):
     """
     Generate violin plots for delta metrics and runtime.
-    TODO: Implement seaborn violin plots.
     """
     logger.info("Generating violin plots...")
-    pass
+    metrics = {
+        "delta_qlocal": ("Delta Q_local", "Delta Q_local"),
+        "delta_qglobal": ("Delta Q_global", "Delta Q_global"),
+        "insertion_time": ("Insertion Time (s)", "Insertion Time (s)")
+    }
+    
+    # 1. Aggregated (all datasets)
+    for metric, (title, ylabel) in metrics.items():
+        if metric in df.columns:
+            _plot_metric(df, metric, f"Aggregated {title} by Method", ylabel, 'violinplot', output_dir, "violin_aggregated")
+            
+    # 2. Per dataset
+    for dataset in df["dataset"].unique():
+        ds_df = df[df["dataset"] == dataset]
+        for metric, (title, ylabel) in metrics.items():
+            if metric in ds_df.columns:
+                _plot_metric(ds_df, metric, f"{dataset}: {title} by Method", ylabel, 'violinplot', output_dir, f"violin_{dataset}")
 
-def generate_scatter_plots(df, output_dir: str):
+def _plot_scatter(df: pd.DataFrame, x_metric: str, y_metric: str, title: str, xlabel: str, ylabel: str, output_dir: str, file_prefix: str):
     """
-    Generate scatter plots (e.g. radius vs delta metrics).
-    TODO: Implement seaborn scatter plots.
+    Helper to generate a scatter plot colored by method.
+    """
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(data=df, x=x_metric, y=y_metric, hue="method", alpha=0.7)
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"{file_prefix}_{y_metric}.png"))
+    plt.close()
+
+def generate_scatter_plots(df: pd.DataFrame, output_dir: str):
+    """
+    Generate scatter plots (radius vs delta metrics/runtime).
     """
     logger.info("Generating scatter plots...")
-    pass
+    if "full_map_radius" not in df.columns:
+        logger.warning("full_map_radius not found, skipping scatter plots.")
+        return
+        
+    metrics = {
+        "delta_qlocal": ("Delta Q_local", "Delta Q_local"),
+        "delta_qglobal": ("Delta Q_global", "Delta Q_global"),
+        "insertion_time": ("Insertion Time (s)", "Insertion Time (s)")
+    }
+    
+    # 1. Aggregated (all datasets)
+    for metric, (title, ylabel) in metrics.items():
+        if metric in df.columns:
+            _plot_scatter(
+                df, "full_map_radius", metric,
+                f"Aggregated: Radius vs {title}",
+                "Full Map Radius", ylabel,
+                output_dir, "scatter_aggregated"
+            )
+            
+    # 2. Per dataset
+    for dataset in df["dataset"].unique():
+        ds_df = df[df["dataset"] == dataset]
+        for metric, (title, ylabel) in metrics.items():
+            if metric in ds_df.columns:
+                _plot_scatter(
+                    ds_df, "full_map_radius", metric,
+                    f"{dataset}: Radius vs {title}",
+                    "Full Map Radius", ylabel,
+                    output_dir, f"scatter_{dataset}"
+                )
 
 def compute_summary_statistics(df: pd.DataFrame, output_dir: str):
     """
@@ -286,9 +378,9 @@ def main():
         logger.info(f"Data remaining after filtering: {len(df)} rows.")
     
     # 4. Generate plots and analyses
-    # generate_boxplots(df, args.output_dir)
-    # generate_violin_plots(df, args.output_dir)
-    # generate_scatter_plots(df, args.output_dir)
+    generate_boxplots(df, args.output_dir)
+    generate_violin_plots(df, args.output_dir)
+    generate_scatter_plots(df, args.output_dir)
     compute_summary_statistics(df, args.output_dir)
     analyze_outliers(df, args.output_dir)
     analyze_radial_bins(df, args.output_dir)

@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+import numpy as np
 import pandas as pd
 
 # Configure logging
@@ -104,29 +105,148 @@ def generate_scatter_plots(df, output_dir: str):
     logger.info("Generating scatter plots...")
     pass
 
-def analyze_outliers(df, output_dir: str):
+def compute_summary_statistics(df: pd.DataFrame, output_dir: str):
+    """
+    Compute per-method summary statistics for key metrics.
+    """
+    logger.info("Computing per-method summary statistics...")
+    metrics = ["delta_qlocal", "delta_qglobal", "insertion_time"]
+    
+    available_metrics = [m for m in metrics if m in df.columns]
+    
+    if available_metrics:
+        summary_df = df.groupby("method")[available_metrics].agg(["mean", "median", "std", "min", "max"])
+        summary_df.columns = ["_".join(col).strip() for col in summary_df.columns.values]
+        summary_df = summary_df.reset_index()
+        
+        out_path = os.path.join(output_dir, "summary_statistics.csv")
+        summary_df.to_csv(out_path, index=False)
+        logger.info(f"Saved summary statistics to {out_path}")
+        return summary_df
+    return None
+
+def analyze_outliers(df: pd.DataFrame, output_dir: str):
     """
     Perform Tukey outlier analysis (1.5 IQR) on delta_Qlocal per method.
-    TODO: Identify outliers and save examples/tables.
+    Identifies outliers and computes per-method outlier overlap table.
     """
-    logger.info("Analyzing outliers...")
-    pass
+    logger.info("Analyzing outliers for delta_qlocal...")
+    
+    if "delta_qlocal" not in df.columns:
+        logger.warning("delta_qlocal not found, skipping outlier analysis.")
+        return
+        
+    outlier_df = df.copy()
+    outlier_df["is_outlier"] = False
+    
+    for method in outlier_df["method"].unique():
+        method_mask = outlier_df["method"] == method
+        method_data = outlier_df.loc[method_mask, "delta_qlocal"]
+        
+        # Handle cases with very few points or NaNs
+        if len(method_data.dropna()) < 4:
+            continue
+            
+        q1 = method_data.quantile(0.25)
+        q3 = method_data.quantile(0.75)
+        iqr = q3 - q1
+        
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        
+        outlier_mask = method_mask & ((outlier_df["delta_qlocal"] < lower_bound) | (outlier_df["delta_qlocal"] > upper_bound))
+        outlier_df.loc[outlier_mask, "is_outlier"] = True
+        
+        logger.info(f"Method '{method}': Found {outlier_mask.sum()} outliers for delta_qlocal "
+                    f"(bounds: [{lower_bound:.4f}, {upper_bound:.4f}])")
 
-def analyze_radial_bins(df, output_dir: str):
+    outliers_path = os.path.join(output_dir, "outliers_flagged.csv")
+    outlier_df.to_csv(outliers_path, index=False)
+    
+    # Outlier overlap table
+    try:
+        pivot_outliers = outlier_df.pivot_table(
+            index=["dataset", "protein_id"], 
+            columns="method", 
+            values="is_outlier",
+            aggfunc="first"
+        ).fillna(False)
+        
+        methods = pivot_outliers.columns
+        overlap_matrix = pd.DataFrame(index=methods, columns=methods, dtype=int)
+        
+        for m1 in methods:
+            for m2 in methods:
+                overlap_matrix.loc[m1, m2] = (pivot_outliers[m1] & pivot_outliers[m2]).sum()
+                
+        overlap_path = os.path.join(output_dir, "outlier_overlap_matrix.csv")
+        overlap_matrix.to_csv(overlap_path)
+        logger.info(f"Saved outlier overlap matrix to {overlap_path}")
+    except Exception as e:
+        logger.warning(f"Could not compute outlier overlap matrix: {e}")
+
+def analyze_radial_bins(df: pd.DataFrame, output_dir: str):
     """
     Bin by full_map_radius and compute mean/median metrics per bin per method.
-    TODO: Bin data and create bar charts.
     """
     logger.info("Analyzing radial bins...")
-    pass
+    if "full_map_radius" not in df.columns:
+        logger.warning("full_map_radius not found, skipping radial bin analysis.")
+        return
+        
+    df_bins = df.copy()
+    try:
+        df_bins["radius_bin"] = pd.qcut(df_bins["full_map_radius"], q=3, labels=["Center", "Mid", "Periphery"])
+    except Exception as e:
+        logger.warning(f"Failed to qcut radius bins: {e}. Falling back to 3 equal-width bins.")
+        df_bins["radius_bin"] = pd.cut(df_bins["full_map_radius"], bins=3, labels=["Inner", "Mid", "Outer"])
+        
+    metrics = ["delta_qlocal", "delta_qglobal", "insertion_time"]
+    available_metrics = [m for m in metrics if m in df_bins.columns]
+    
+    if available_metrics:
+        bin_summary = df_bins.groupby(["method", "radius_bin"], observed=False)[available_metrics].agg(["mean", "median"])
+        bin_summary.columns = ["_".join(col).strip() for col in bin_summary.columns.values]
+        bin_summary = bin_summary.reset_index()
+        
+        bin_path = os.path.join(output_dir, "radial_bin_summary.csv")
+        bin_summary.to_csv(bin_path, index=False)
+        logger.info(f"Saved radial bin summary to {bin_path}")
 
-def compute_correlations(df, output_dir: str):
+def compute_correlations(df: pd.DataFrame, output_dir: str):
     """
     Compute Spearman correlations (e.g. radius vs delta metrics).
-    TODO: Compute and log/save correlations.
     """
     logger.info("Computing Spearman correlations...")
-    pass
+    if "full_map_radius" not in df.columns:
+        logger.warning("full_map_radius not found, skipping correlation analysis.")
+        return
+        
+    metrics = ["delta_qlocal", "delta_qglobal"]
+    available_metrics = [m for m in metrics if m in df.columns]
+    
+    if not available_metrics:
+        return
+        
+    results = []
+    for method in df["method"].unique():
+        method_df = df[df["method"] == method]
+        row = {"method": method}
+        
+        for metric in available_metrics:
+            try:
+                corr = method_df[["full_map_radius", metric]].corr(method="spearman").iloc[0, 1]
+                row[f"corr_radius_vs_{metric}"] = corr
+            except Exception as e:
+                logger.warning(f"Failed to compute correlation for {method} {metric}: {e}")
+                row[f"corr_radius_vs_{metric}"] = None
+                
+        results.append(row)
+        
+    corr_df = pd.DataFrame(results)
+    corr_path = os.path.join(output_dir, "spearman_correlations.csv")
+    corr_df.to_csv(corr_path, index=False)
+    logger.info(f"Saved Spearman correlations to {corr_path}")
 
 def generate_markdown_report(df, output_dir: str):
     """
@@ -169,9 +289,10 @@ def main():
     # generate_boxplots(df, args.output_dir)
     # generate_violin_plots(df, args.output_dir)
     # generate_scatter_plots(df, args.output_dir)
-    # analyze_outliers(df, args.output_dir)
-    # analyze_radial_bins(df, args.output_dir)
-    # compute_correlations(df, args.output_dir)
+    compute_summary_statistics(df, args.output_dir)
+    analyze_outliers(df, args.output_dir)
+    analyze_radial_bins(df, args.output_dir)
+    compute_correlations(df, args.output_dir)
     
     # 5. Generate final report
     # report_dir = os.path.join(os.path.dirname(args.output_dir), "reports")

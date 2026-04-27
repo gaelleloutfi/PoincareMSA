@@ -82,8 +82,8 @@ def load_results(results_dir: str) -> pd.DataFrame:
         
     required_cols = [
         "dataset", "protein_id", "method", "insertion_time",
-        "qlocal_reduced_before", "qlocal_after",
-        "qglobal_reduced_before", "qglobal_after",
+        "Qlocal_red", "Qlocal_after",
+        "Qglobal_red", "Qglobal_after",
         "full_map_radius"
     ]
     missing_cols = [col for col in required_cols if col not in df.columns]
@@ -92,8 +92,8 @@ def load_results(results_dir: str) -> pd.DataFrame:
         sys.exit(1)
         
     # Calculate delta metrics
-    df["delta_qlocal"] = df["qlocal_after"] - df["qlocal_reduced_before"]
-    df["delta_qglobal"] = df["qglobal_after"] - df["qglobal_reduced_before"]
+    df["delta_qlocal"] = df["Qlocal_after"] - df["Qlocal_red"]
+    df["delta_qglobal"] = df["Qglobal_after"] - df["Qglobal_red"]
     
     logger.info(f"Successfully loaded {len(df)} rows across {df['dataset'].nunique()} dataset(s).")
     return df

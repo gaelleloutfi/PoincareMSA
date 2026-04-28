@@ -1394,6 +1394,37 @@ def run_benchmark(args: argparse.Namespace) -> None:
     df_full_emb["proteins_id"] = labels
     df_full_emb["radius"] = radii_full
     df_full_emb.to_csv(paths["full_map_emb"], index=False)
+    
+    # Generate the Poincaré map plot for the Full Map
+    try:
+        from scripts.visualize_projection.pplots_new import plot_embedding
+        import matplotlib.pyplot as plt
+        
+        plot_path = os.path.join(paths["base"], f"full_map_plot_{args.dataset}.png")
+        
+        # If we have annotations, let's try to find a good column for coloring
+        color_col = "cluster"
+        df_full_emb[color_col] = "protein"
+        if bundle.annotations is not None:
+            # Let's guess some common column names for grouping
+            for potential_col in ["group", "subfamily", "kingdom", "family"]:
+                if potential_col in bundle.annotations.columns:
+                    df_full_emb[color_col] = bundle.annotations[potential_col].values
+                    break
+        
+        # pplots_new handles the plotting and saving
+        plot_embedding(
+            df=df_full_emb,
+            labels_name=color_col,
+            title=f"Full Poincaré Map ({args.dataset})",
+            file_name=plot_path,
+            file_format="png",
+            plot_legend=True,
+            show_text=False
+        )
+        logger.info("      Saved Full Map plot to %s", plot_path)
+    except Exception as e:
+        logger.warning("      Could not plot Full Map: %s", e)
 
     full_map_meta = {
         "dataset": args.dataset,

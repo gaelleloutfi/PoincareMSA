@@ -1212,7 +1212,7 @@ def compute_neighbor_overlap(
     Compare the k nearest neighbours of the removed protein in the full map
     vs. the k nearest neighbours of the inserted point in the reduced map.
 
-    Returns the fraction of shared neighbours (Jaccard-style overlap ∈ [0, 1]).
+    Returns the fraction of shared neighbours
     """
     # 1. Distances from the original point to all OTHER points in full map
     emb_full_others = np.delete(full_emb, removed_idx, axis=0)
@@ -1397,32 +1397,64 @@ def run_benchmark(args: argparse.Namespace) -> None:
     
     # Generate the Poincaré map plot for the Full Map
     try:
-        from scripts.visualize_projection.pplots_new import plot_embedding
+        import matplotlib
+        matplotlib.use("Agg")  # safe backend for WSL / non-interactive runs
+
         import matplotlib.pyplot as plt
-        
+
         plot_path = os.path.join(paths["base"], f"full_map_plot_{args.dataset}.png")
-        
-        # If we have annotations, let's try to find a good column for coloring
-        color_col = "cluster"
-        df_full_emb[color_col] = "protein"
+
+        plt.figure(figsize=(8, 8))
+
+        # Color by annotation if possible
+        color_col = None
         if bundle.annotations is not None:
-            # Let's guess some common column names for grouping
             for potential_col in ["group", "subfamily", "kingdom", "family"]:
                 if potential_col in bundle.annotations.columns:
-                    df_full_emb[color_col] = bundle.annotations[potential_col].values
+                    color_col = potential_col
                     break
-        
-        # pplots_new handles the plotting and saving
-        plot_embedding(
-            df=df_full_emb,
-            labels_name=color_col,
-            title=f"Full Poincaré Map ({args.dataset})",
-            file_name=plot_path,
-            file_format="png",
-            plot_legend=True,
-            show_text=False
-        )
-        logger.info("      Saved Full Map plot to %s", plot_path)
+
+        if color_col is not None:
+            groups = bundle.annotations[color_col].astype(str).values
+            unique_groups = sorted(set(groups))
+
+            for group in unique_groups:
+                mask = groups == group
+                plt.scatter(
+                    df_full_emb.loc[mask, "pm1"],
+                    df_full_emb.loc[mask, "pm2"],
+                    s=25,
+                    alpha=0.8,
+                    label=group,
+                )
+
+            plt.legend(fontsize=8, loc="best")
+        else:
+            plt.scatter(
+                df_full_emb["pm1"],
+                df_full_emb["pm2"],
+                s=25,
+                alpha=0.8,
+            )
+
+        # Draw unit circle = boundary of Poincaré disk
+        circle = plt.Circle((0, 0), 1, fill=False, linestyle="--", linewidth=1)
+        plt.gca().add_patch(circle)
+
+        plt.title(f"Full Poincaré Map ({args.dataset})")
+        plt.xlabel("Poincaré dimension 1")
+        plt.ylabel("Poincaré dimension 2")
+        plt.axis("equal")
+        plt.tight_layout()
+
+        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        if os.path.exists(plot_path):
+            logger.info("      Saved Full Map plot to %s", plot_path)
+        else:
+            logger.warning("      Plot command ran, but file was not created: %s", plot_path)
+
     except Exception as e:
         logger.warning("      Could not plot Full Map: %s", e)
 
@@ -1456,8 +1488,22 @@ def run_benchmark(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     logger.info("[4/5] Starting leave-one-out iterations …")
     all_rows: list[dict] = []
+    completed_triples: set[tuple[str, str]] = set()  # (protein_id, method)
     n_ok = 0
     n_err = 0
+
+    if args.resume and os.path.isfile(paths["partial_results"]):
+        try:
+            prev_df = pd.read_csv(paths["partial_results"])
+            for _, r in prev_df.iterrows():
+                completed_triples.add((str(r["protein_id"]), str(r["method"])))
+                all_rows.append(r.to_dict())
+            logger.info(
+                "      Resume: loaded %d already-completed rows (%d unique triples).",
+                len(prev_df), len(completed_triples),
+            )
+        except Exception as exc:
+            logger.warning("      Could not load partial results for resume: %s", exc)
 
     for iter_idx, remove_idx in enumerate(remove_indices):
         protein_id = str(bundle.labels[remove_idx])
@@ -1509,6 +1555,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
         }
 
         for method_name, method_fn in methods.items():
+            if args.resume and (protein_id, method_name) in completed_triples:
+                logger.info("    SKIP %s (already completed)", method_name)
+                n_ok += 1
+                continue
             try:
                 new_emb, insertion_time = method_fn()
 
@@ -1579,9 +1629,28 @@ def run_benchmark(args: argparse.Namespace) -> None:
     logger.info("[5/5] Saving results …")
     if all_rows:
         results_df = pd.DataFrame(all_rows)
+
+        # Merge with rows from other datasets already in the shared CSV so that
+        # successive per-dataset runs accumulate rather than overwrite each other.
+        if os.path.isfile(paths["final_results"]):
+            try:
+                prev_all = pd.read_csv(paths["final_results"])
+                other = prev_all[prev_all["dataset"] != args.dataset]
+                if len(other):
+                    results_df = pd.concat([other, results_df], ignore_index=True)
+                    logger.info(
+                        "      Merged %d rows from other dataset(s) into final CSV.",
+                        len(other),
+                    )
+            except Exception as exc:
+                logger.warning("      Could not merge existing results, overwriting: %s", exc)
+
         results_df.to_csv(paths["final_results"], index=False)
-        logger.info("      Saved %d rows → %s", len(results_df), paths["final_results"])
-        save_summary_tables(results_df, paths["base"])
+        logger.info("      Saved %d total rows → %s", len(results_df), paths["final_results"])
+        # Pass only the current dataset's rows to the in-run summary tables so
+        # they stay per-dataset (the analysis script handles cross-dataset agg).
+        current_df = results_df[results_df["dataset"] == args.dataset]
+        save_summary_tables(current_df, paths["base"])
     else:
         logger.warning("      No successful rows to save.")
 

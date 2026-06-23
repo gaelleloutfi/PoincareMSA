@@ -1,0 +1,9 @@
+{
+  "dataset": "thioredoxins",
+  "N": 210,
+  "feature_dim": 768,
+  "qlocal_full": 0.5227281746031747,
+  "qglobal_full": 0.8131891533484601,
+  "loss_full": 0.5449477314949036,
+  "build_time_sec": 13.136871700000484
+}

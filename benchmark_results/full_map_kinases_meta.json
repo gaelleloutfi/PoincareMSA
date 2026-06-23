@@ -1,0 +1,9 @@
+{
+  "dataset": "kinases",
+  "N": 497,
+  "feature_dim": 768,
+  "qlocal_full": 0.5386354442189452,
+  "qglobal_full": 0.8034233729561807,
+  "loss_full": 1.520593686537309,
+  "build_time_sec": 19.85046639991924
+}

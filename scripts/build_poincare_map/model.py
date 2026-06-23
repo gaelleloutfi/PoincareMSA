@@ -320,7 +320,139 @@ class PoincareEmbedding(nn.Module):
                     new.mul_((boundary - 1e-8) / norm)
 
         return new.detach().cpu().numpy().reshape(self.dim,)
-    
+
+    def infer_batch_embedding(
+        self,
+        targets,
+        n_steps: int = 500,
+        lr: float = 0.05,
+        init_vecs=None,
+        device: str = None,
+    ):
+        """
+        Jointly optimize positions for k new points via shared SGD.
+
+        Unlike calling infer_embedding_for_point k times, here all k positions
+        are free parameters optimized simultaneously. Each protein i's loss
+        depends on the current positions of the other k-1 batch proteins
+        (they appear as anchors in its embedding pool), so the gradients couple
+        all k positions in each step.
+
+        Parameters
+        ----------
+        targets : list of k array-like, each of length (N_existing + k - 1).
+            targets[i] is the target RFA distribution for batch protein i
+            against the N_existing base proteins followed by the k-1 other
+            batch proteins in index order [j for j in range(k) if j != i].
+            Must already be normalized to sum to 1.
+        n_steps : int
+            Number of SGD steps.
+        lr : float
+            Learning rate.
+        init_vecs : array-like of shape (k, dim), optional
+            Initial positions inside the Poincaré ball. If None, small random
+            noise is used. Passing barycenter positions is recommended.
+        device : str, optional
+
+        Returns
+        -------
+        positions : np.ndarray of shape (k, dim)
+        """
+        if device is None:
+            try:
+                device = next(self.parameters()).device
+            except StopIteration:
+                device = torch.device('cpu')
+
+        k = len(targets)
+
+        # Fixed base embeddings — no gradient needed
+        with torch.no_grad():
+            old_embs = self.lt.weight.detach().clone().to(device)  # (N_existing, dim)
+
+        # Prepare and normalize targets
+        target_tensors = []
+        for t in targets:
+            if not isinstance(t, torch.Tensor):
+                t = torch.tensor(t, dtype=torch.float32, device=device)
+            else:
+                t = t.to(device).float()
+            t = t / t.sum().clamp(min=1e-12)
+            target_tensors.append(t)
+
+        # Initialize k positions as a single (k, dim) Parameter
+        if init_vecs is not None:
+            if not isinstance(init_vecs, torch.Tensor):
+                init_t = torch.tensor(init_vecs, dtype=torch.float32, device=device)
+            else:
+                init_t = init_vecs.to(device).float()
+            init_t = init_t.reshape(k, self.dim)
+            # per-row projection onto the open Poincaré ball
+            norms = init_t.norm(p=2, dim=1, keepdim=True)
+            over = (norms >= boundary).squeeze(1)
+            if over.any():
+                init_t[over] = init_t[over] / norms[over] * (boundary - 1e-8)
+        else:
+            init_t = torch.zeros(k, self.dim, dtype=torch.float32, device=device)
+            init_t.uniform_(-1e-4, 1e-4)
+
+        new_embs = torch.nn.Parameter(init_t)
+        # Scale lr by 1/k: each parameter accumulates k gradient terms per step
+        # (1 direct + k-1 indirect from coupling), so naive lr is k× too large.
+        effective_lr = lr / max(k, 1)
+        optim = torch.optim.SGD([new_embs], lr=effective_lr)
+        lossfn = self.lossfn
+
+        for _ in range(n_steps):
+            optim.zero_grad()
+            total_loss = torch.zeros(1, device=device)
+
+            for i in range(k):
+                # Anchor pool for protein i: base map + other k-1 batch proteins
+                other_idx = [j for j in range(k) if j != i]
+                other_new  = new_embs[other_idx]          # (k-1, dim) — keeps gradient
+                embs_pool  = torch.cat([old_embs, other_new], dim=0)  # (N_existing+k-1, dim)
+                N_pool     = embs_pool.size(0)
+
+                pos_i        = new_embs[i:i+1]                                    # (1, dim)
+                embs_all_i   = embs_pool.unsqueeze(0)                             # (1, N_pool, dim)
+                embs_input_i = pos_i.unsqueeze(0).expand(1, N_pool, self.dim)     # (1, N_pool, dim)
+
+                dists_i = self.dist().apply(embs_input_i, embs_all_i).squeeze(-1) # (1, N_pool)
+
+                if self.lossfnname in ('klSym', 'mse'):
+                    if self.Qdist == 'laplace':
+                        preds_i = self.sm(-self.gamma * dists_i)
+                    elif self.Qdist == 'gaussian':
+                        preds_i = self.sm(-self.gamma * dists_i.pow(2))
+                    else:
+                        preds_i = self.sm(-torch.log(1 + self.gamma * dists_i))
+                else:  # 'kl'
+                    if self.Qdist == 'laplace':
+                        preds_i = self.lsm(-self.gamma * dists_i)
+                    elif self.Qdist == 'gaussian':
+                        preds_i = self.lsm(-self.gamma * dists_i.pow(2))
+                    else:
+                        preds_i = self.lsm(-torch.log(1 + self.gamma * dists_i))
+
+                total_loss = total_loss + lossfn(preds_i, target_tensors[i].unsqueeze(0))
+
+            total_loss.backward()
+            optim.step()
+
+            # Per-row retraction onto the Poincaré ball
+            with torch.no_grad():
+                norms = new_embs.norm(p=2, dim=1)
+                over  = norms >= boundary
+                if over.any():
+                    new_embs.data[over] = (
+                        new_embs.data[over]
+                        / norms[over].unsqueeze(1)
+                        * (boundary - 1e-8)
+                    )
+
+        return new_embs.detach().cpu().numpy()
+
     def train_single_point(
         self,
         target,

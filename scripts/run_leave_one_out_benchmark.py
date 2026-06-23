@@ -297,6 +297,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save per-iteration reduced and inserted embeddings to disk.",
     )
+    out_group.add_argument(
+        "--skip_proteins",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated protein IDs to skip entirely (e.g. '240,315'). "
+            "Useful when a specific protein causes a hang."
+        ),
+    )
+    out_group.add_argument(
+        "--timeout_per_iter",
+        type=int,
+        default=300,
+        help=(
+            "Wall-clock seconds allowed for the reduced-map build of a single "
+            "iteration before it is aborted and logged as an error (default 300)."
+        ),
+    )
 
     # ---- Verbosity / debug --------------------------------------------
     p.add_argument(
@@ -1287,6 +1305,36 @@ def build_result_row(
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
+def run_with_timeout(fn, timeout_sec: int, *args, **kwargs):
+    """
+    Run fn(*args, **kwargs) in a daemon thread.
+    Raises TimeoutError if it doesn't finish within timeout_sec seconds.
+    The thread itself cannot be force-killed on Windows; it runs as a daemon
+    and will be reaped when the main process exits.
+    """
+    import threading
+    result = [None]
+    exc    = [None]
+
+    def _target():
+        try:
+            result[0] = fn(*args, **kwargs)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout_sec)
+    if t.is_alive():
+        raise TimeoutError(
+            f"Iteration timed out after {timeout_sec}s — "
+            "thread left as daemon and will die when the process exits."
+        )
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 def append_row_to_partial(row: dict, partial_path: str) -> None:
     """Append a single result row to the partial CSV checkpoint file."""
     df = pd.DataFrame([row])
@@ -1489,6 +1537,11 @@ def run_benchmark(args: argparse.Namespace) -> None:
     logger.info("[4/5] Starting leave-one-out iterations …")
     all_rows: list[dict] = []
     completed_triples: set[tuple[str, str]] = set()  # (protein_id, method)
+    skip_proteins: set[str] = {
+        s.strip() for s in args.skip_proteins.split(",") if s.strip()
+    }
+    if skip_proteins:
+        logger.info("      Skipping protein IDs: %s", sorted(skip_proteins))
     n_ok = 0
     n_err = 0
 
@@ -1512,13 +1565,30 @@ def run_benchmark(args: argparse.Namespace) -> None:
             iter_idx + 1, len(remove_indices), protein_id, radii_full[remove_idx],
         )
 
+        # --- skip list (--skip_proteins) ------------------------------
+        if protein_id in skip_proteins:
+            logger.info("    SKIP protein %s (in --skip_proteins list)", protein_id)
+            continue
+
         # --- a) Build reduced map (N-1 proteins) ----------------------
         try:
             tmp_red = os.path.join(paths["base"], f"_tmp_reduced_{iter_idx:04d}")
             os.makedirs(tmp_red, exist_ok=True)
 
-            reduced_res = build_reduced_map_for_removal(remove_idx, bundle, args, tmp_red)
+            reduced_res = run_with_timeout(
+                build_reduced_map_for_removal,
+                args.timeout_per_iter,
+                remove_idx, bundle, args, tmp_red,
+            )
 
+        except TimeoutError as exc:
+            logger.warning(
+                "    Reduced map TIMEOUT for %s after %ds — skipping.",
+                protein_id, args.timeout_per_iter,
+            )
+            log_error(paths["errors"], args.dataset, protein_id, "build_reduced_map", exc)
+            n_err += 1
+            continue
         except Exception as exc:
             logger.warning("    Reduced map FAILED for %s: %s", protein_id, exc)
             log_error(paths["errors"], args.dataset, protein_id, "build_reduced_map", exc)
